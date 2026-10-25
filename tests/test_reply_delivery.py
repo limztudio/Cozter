@@ -16,7 +16,7 @@ from Cozter.tests.helpers import (
 )
 
 
-class _ReplyDeliveryBot(OfflineBot):
+class ReplyDeliveryBot(OfflineBot):
     def __init__(self, workspace_path: str, *, fail_final: bool) -> None:
         super().__init__(["u1"])
         self.workspace_path = workspace_path
@@ -52,7 +52,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_detached_reply_preserves_an_interactive_answer_pause(self):
         with tempfile.TemporaryDirectory() as tmp:
-            bot = _ReplyDeliveryBot(tmp, fail_final=False)
+            bot = ReplyDeliveryBot(tmp, fail_final=False)
             bot._awaiting_answer.add("u1")
             result = AgentResult(events=[ChatEvent(kind="text", content="background done [[await]]")])
 
@@ -68,7 +68,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
             old_config_dir = workspace.CONFIG_DIR
             workspace.CONFIG_DIR = tmp
             self.addCleanup(setattr, workspace, "CONFIG_DIR", old_config_dir)
-            bot = _ReplyDeliveryBot(tmp, fail_final=True)
+            bot = ReplyDeliveryBot(tmp, fail_final=True)
             ctx = BotContext(
                 user_id="u1", chat_id="chat", text="prompt",
                 command=None, args="", attachment=None, platform=bot,
@@ -108,7 +108,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(queue.qsize(), 1)
 
                 # Simulate a restart via a fresh platform instance.
-                retry_bot = _ReplyDeliveryBot(tmp, fail_final=False)
+                retry_bot = ReplyDeliveryBot(tmp, fail_final=False)
                 await retry_bot.restore_reply_deliveries()
                 await retry_bot._check_reply_deliveries()
 
@@ -126,7 +126,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
             old_config_dir = workspace.CONFIG_DIR
             workspace.CONFIG_DIR = tmp
             self.addCleanup(setattr, workspace, "CONFIG_DIR", old_config_dir)
-            before_crash = _ReplyDeliveryBot(tmp, fail_final=False)
+            before_crash = ReplyDeliveryBot(tmp, fail_final=False)
             entry_id = await persist_queue_entry(before_crash,
                 "u1", "prompt", "chat",
             )
@@ -143,7 +143,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
                 len(await before_crash._list_reply_delivery_records()), 1,
             )
 
-            retry_bot = _ReplyDeliveryBot(tmp, fail_final=False)
+            retry_bot = ReplyDeliveryBot(tmp, fail_final=False)
             with mock.patch.object(
                 agent, "run", new=mock.AsyncMock(),
             ) as run_agent:
@@ -167,7 +167,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
             old_config_dir = workspace.CONFIG_DIR
             workspace.CONFIG_DIR = tmp
             self.addCleanup(setattr, workspace, "CONFIG_DIR", old_config_dir)
-            bot = _ReplyDeliveryBot(tmp, fail_final=False)
+            bot = ReplyDeliveryBot(tmp, fail_final=False)
             entry_id = await persist_queue_entry(bot, "u1", "prompt", "chat")
             record = await bot._stage_reply_delivery(
                 "u1", entry_id, "chat", tmp,
@@ -205,7 +205,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
             old_config_dir = workspace.CONFIG_DIR
             workspace.CONFIG_DIR = tmp
             self.addCleanup(setattr, workspace, "CONFIG_DIR", old_config_dir)
-            bot = _ReplyDeliveryBot(tmp, fail_final=False)
+            bot = ReplyDeliveryBot(tmp, fail_final=False)
             result = AgentResult(events=[
                 ChatEvent(kind="text", content="final response"),
             ])
@@ -235,7 +235,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
         for command in ("stop", "cancel"):
             with self.subTest(command=command), tempfile.TemporaryDirectory() as tmp:
                 with mock.patch.object(workspace, "CONFIG_DIR", tmp):
-                    bot = _ReplyDeliveryBot(tmp, fail_final=False)
+                    bot = ReplyDeliveryBot(tmp, fail_final=False)
                     entry_id = await persist_queue_entry(bot, "u1", "prompt", "chat")
                     record = await bot._stage_reply_delivery(
                         "u1", entry_id, "chat", tmp,
@@ -275,7 +275,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
         """
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.object(workspace, "CONFIG_DIR", tmp):
-                bot = _ReplyDeliveryBot(tmp, fail_final=False)
+                bot = ReplyDeliveryBot(tmp, fail_final=False)
                 entry_id = await persist_queue_entry(bot, "u1", "prompt", "chat")
                 await bot._stage_reply_delivery(
                     "u1", entry_id, "chat", tmp,
@@ -336,7 +336,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
         """
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.object(workspace, "CONFIG_DIR", tmp):
-                bot = _ReplyDeliveryBot(tmp, fail_final=False)
+                bot = ReplyDeliveryBot(tmp, fail_final=False)
                 entry_id = await persist_queue_entry(bot, "u1", "prompt", "chat")
                 record = await bot._stage_reply_delivery(
                     "u1", entry_id, "chat", tmp,
@@ -389,7 +389,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
             with open(second_pic, "wb") as file_handle:
                 file_handle.write(b"second-picture")
 
-            class _UploadBot(_ReplyDeliveryBot):
+            class _UploadBot(ReplyDeliveryBot):
                 def __init__(self, workspace_path: str) -> None:
                     super().__init__(workspace_path, fail_final=False)
                     self.files: list[str] = []
@@ -447,7 +447,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
             with open(pic, "wb") as file_handle:
                 file_handle.write(b"picture")
 
-            class _StuckUploadBot(_ReplyDeliveryBot):
+            class _StuckUploadBot(ReplyDeliveryBot):
                 def __init__(self, workspace_path: str) -> None:
                     super().__init__(workspace_path, fail_final=False)
                     self.files: list[str] = []
@@ -476,7 +476,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         """A stuck wait names backend/model/PID/elapsed/last-progress."""
-        bot = _ReplyDeliveryBot(self._temporary_workspace(), fail_final=False)
+        bot = ReplyDeliveryBot(self._temporary_workspace(), fail_final=False)
         task = asyncio.current_task()
         assert task is not None
         bot._running_tasks["u1"] = task
@@ -497,7 +497,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         """Progress labels never carry command text, paths, or secrets."""
-        bot = _ReplyDeliveryBot(self._temporary_workspace(), fail_final=False)
+        bot = ReplyDeliveryBot(self._temporary_workspace(), fail_final=False)
         task = asyncio.current_task()
         assert task is not None
         bot._running_tasks["u1"] = task
@@ -528,7 +528,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         """Missing progress uses explicit unknown fields in the current diagnostic format."""
-        bot = _ReplyDeliveryBot(self._temporary_workspace(), fail_final=False)
+        bot = ReplyDeliveryBot(self._temporary_workspace(), fail_final=False)
         task = asyncio.current_task()
         assert task is not None
         bot._running_tasks["u1"] = task
@@ -539,7 +539,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_turn_progress_cleared_on_cleanup(self) -> None:
         """Finished/cancelled turns drop their attribution record."""
-        bot = _ReplyDeliveryBot(self._temporary_workspace(), fail_final=False)
+        bot = ReplyDeliveryBot(self._temporary_workspace(), fail_final=False)
         bot._begin_turn_progress("u1", backend="meta", model="m")
         bot._record_turn_event_progress(
             "u1", ChatEvent(kind="tool", content="bash"),

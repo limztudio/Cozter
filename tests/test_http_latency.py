@@ -12,7 +12,7 @@ from aiohttp import web
 
 from Cozter.backends_agent import _openai_agent as oa
 from Cozter.backends_agent.base import AgentResult
-from Cozter.tests.test_openai_agent import _EventCaptureProcess, _SSESession, _SSEResponse, _tool_call
+from Cozter.tests.test_openai_agent import EventCaptureProcess, SseSession, SseResponse, make_tool_call
 
 
 class _LongWorkBackend(oa.OpenAIChatBackend):
@@ -38,7 +38,7 @@ class ToolLoopLatencyTests(unittest.IsolatedAsyncioTestCase):
             executed.append((name, args))
             return tool_result(args)
 
-        proc = _EventCaptureProcess()
+        proc = EventCaptureProcess()
         with (
             mock.patch.object(oa, "_stream_completion", side_effect=stream),
             mock.patch.object(oa.tools, "execute_tool", side_effect=execute),
@@ -52,7 +52,7 @@ class ToolLoopLatencyTests(unittest.IsolatedAsyncioTestCase):
         def response(payload, number):
             if "tools" not in payload:
                 return "Finished from available evidence.", "", []
-            return "", "", [_tool_call(f"call-{number}", "same.txt")]
+            return "", "", [make_tool_call(f"call-{number}", "same.txt")]
 
         payloads, executed, events = await self._run(response, lambda _args: "read ok")
         self.assertEqual(len(payloads), 5)  # three reads, one skipped round, final
@@ -65,7 +65,7 @@ class ToolLoopLatencyTests(unittest.IsolatedAsyncioTestCase):
         def response(payload, number):
             if "tools" not in payload:
                 return "Cannot proceed: permission blocks these calls.", "", []
-            return "", "", [_tool_call(f"call-{number}", f"../outside-{number}")]
+            return "", "", [make_tool_call(f"call-{number}", f"../outside-{number}")]
 
         payloads, executed, events = await self._run(
             response, lambda _args: "Error: path escapes workspace: x",
@@ -87,11 +87,11 @@ class ToolLoopLatencyTests(unittest.IsolatedAsyncioTestCase):
             calls.append(copy.deepcopy(payload))
             if "tools" not in payload:
                 return "Outside paths require full permission.", "", []
-            return "", "", [_tool_call(str(len(calls)), f"../outside-{len(calls)}")]
+            return "", "", [make_tool_call(str(len(calls)), f"../outside-{len(calls)}")]
 
         with mock.patch.object(oa, "_stream_completion", side_effect=stream):
             await _LongWorkBackend()._run_agent(
-                _EventCaptureProcess(), ".", "work", "model", "auto", False, 0,
+                EventCaptureProcess(), ".", "work", "model", "auto", False, 0,
             )
         self.assertEqual(len(calls), 4)
         self.assertNotIn("tools", calls[-1])
@@ -113,7 +113,7 @@ class ToolLoopLatencyTests(unittest.IsolatedAsyncioTestCase):
         def response(_payload, number):
             if number > 6:
                 return "done", "", []
-            return "", "", [_tool_call(f"call-{number}", f"{number}.txt")]
+            return "", "", [make_tool_call(f"call-{number}", f"{number}.txt")]
 
         payloads, executed, _events = await self._run(response, lambda _args: next(results))
         self.assertEqual(len(executed), 6)
@@ -123,7 +123,7 @@ class ToolLoopLatencyTests(unittest.IsolatedAsyncioTestCase):
         def response(_payload, number):
             if number > 45:
                 return "done", "", []
-            return "", "", [_tool_call(f"call-{number}", f"{number}.txt")]
+            return "", "", [make_tool_call(f"call-{number}", f"{number}.txt")]
 
         payloads, executed, _events = await self._run(response, lambda _args: "new evidence")
         self.assertEqual(len(executed), 45)
@@ -135,7 +135,7 @@ class ToolLoopLatencyTests(unittest.IsolatedAsyncioTestCase):
         def response(_payload, number):
             if number > 5:
                 return "repaired", "", []
-            return "", "", [_tool_call(f"call-{number}", f"missing-{number}.txt")]
+            return "", "", [make_tool_call(f"call-{number}", f"missing-{number}.txt")]
 
         payloads, executed, _events = await self._run(
             response, lambda _args: "Tool read_file failed: No such file or directory",
@@ -183,14 +183,14 @@ class RequestCancellationTests(unittest.IsolatedAsyncioTestCase):
                     yield b": heartbeat\n\n"
                     await asyncio.sleep(0.01)
 
-        class Response(_SSEResponse):
+        class Response(SseResponse):
             async def __aexit__(self, *_args):
                 closed.set()
 
         response = Response([])
         response.content = Content()
         with (
-            mock.patch.object(oa.aiohttp, "ClientSession", return_value=_SSESession(response)),
+            mock.patch.object(oa.aiohttp, "ClientSession", return_value=SseSession(response)),
         ):
             task = asyncio.create_task(oa._stream_completion("http://offline", {}, {}, 3, "test"))
             await started.wait()
@@ -222,13 +222,13 @@ class RequestCancellationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cancelled.is_set())
 
     async def test_timings_record_first_delta_without_prompt_or_response(self):
-        response = _SSEResponse([
+        response = SseResponse([
             b'data: {"choices":[{"delta":{"reasoning_content":"private reasoning"}}]}\n\n',
             b'data: {"choices":[{"delta":{"content":"private answer"}}]}\n\n',
             b'data: [DONE]\n\n',
         ])
         with (
-            mock.patch.object(oa.aiohttp, "ClientSession", return_value=_SSESession(response)),
+            mock.patch.object(oa.aiohttp, "ClientSession", return_value=SseSession(response)),
             self.assertLogs("Cozter.performance", "INFO") as captured,
         ):
             result = await oa._stream_completion(
@@ -257,7 +257,7 @@ class VisionPreparationTests(unittest.IsolatedAsyncioTestCase):
             ) as stream,
         ):
             await _LongWorkBackend()._run_agent(
-                _EventCaptureProcess(), ".", prompt, "model", "full", True, 0,
+                EventCaptureProcess(), ".", prompt, "model", "full", True, 0,
             )
         prepare.assert_not_called()
         payload = stream.await_args.args[1]
@@ -277,7 +277,7 @@ class VisionPreparationTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(oa, "_stream_completion", return_value=("done", "", [])),
         ):
             await _LongWorkBackend()._run_agent(
-                _EventCaptureProcess(), ".", "[image attachment saved to: image.png]",
+                EventCaptureProcess(), ".", "[image attachment saved to: image.png]",
                 "model", "full", False, 0,
             )
         self.assertEqual(len(reader_threads), 1)
@@ -289,7 +289,7 @@ class VisionPreparationTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(oa, "_stream_completion", return_value=("done", "", [])),
         ):
             await _LongWorkBackend()._run_agent(
-                _EventCaptureProcess(), ".", "plain text", "model", "full", False, 0,
+                EventCaptureProcess(), ".", "plain text", "model", "full", False, 0,
             )
         prepare.assert_not_called()
 
@@ -318,7 +318,7 @@ class TerminalStreamLatencyTests(unittest.IsolatedAsyncioTestCase):
             async def read(self, _size):
                 await asyncio.Event().wait()
 
-        class Response(_SSEResponse):
+        class Response(SseResponse):
             async def __aexit__(self, *_args):
                 nonlocal response_closed
                 response_closed = True
@@ -326,7 +326,7 @@ class TerminalStreamLatencyTests(unittest.IsolatedAsyncioTestCase):
         response = Response([])
         response.content = Content()
         with mock.patch.object(
-            oa.aiohttp, "ClientSession", return_value=_SSESession(response),
+            oa.aiohttp, "ClientSession", return_value=SseSession(response),
         ):
             result = await oa._stream_completion(
                 "http://offline", {}, {}, 0, "test",
@@ -394,7 +394,7 @@ class TerminalStreamLatencyTests(unittest.IsolatedAsyncioTestCase):
             }])
 
     async def test_trailer_drain_is_bounded_in_bytes(self):
-        response = _SSEResponse([])
+        response = SseResponse([])
         reads = []
 
         class Content:
@@ -408,7 +408,7 @@ class TerminalStreamLatencyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_cancellation_during_trailer_drain_still_cancels_request(self):
         started = asyncio.Event()
-        response = _SSEResponse([
+        response = SseResponse([
             b'data: {"choices":[{"finish_reason":"stop","delta":{"content":"done"}}]}\n\n',
         ])
         original_content = response.content
@@ -423,7 +423,7 @@ class TerminalStreamLatencyTests(unittest.IsolatedAsyncioTestCase):
 
         response.content = Content()
         task = asyncio.create_task(oa._stream_completion(
-            "http://offline", {}, {}, 0, "test", session=_SSESession(response),
+            "http://offline", {}, {}, 0, "test", session=SseSession(response),
         ))
         await started.wait()
         task.cancel()
@@ -537,18 +537,18 @@ class CompactRequestTests(unittest.TestCase):
         async def stream(_endpoint, payload, *_args, **_kwargs):
             payloads.append(copy.deepcopy(payload))
             if len(payloads) == 1:
-                return "", "", [_tool_call("c", "x.txt")]
+                return "", "", [make_tool_call("c", "x.txt")]
             return "done", "", []
 
         with (
-            mock.patch.object(oa.aiohttp, "ClientSession", return_value=_SSESession(
-                _SSEResponse([]),
+            mock.patch.object(oa.aiohttp, "ClientSession", return_value=SseSession(
+                SseResponse([]),
             )) as factory,
             mock.patch.object(oa, "_stream_completion", side_effect=stream),
             mock.patch.object(oa.tools, "execute_tool", return_value="read ok"),
         ):
             asyncio.run(_LongWorkBackend()._run_agent(
-                _EventCaptureProcess(), ".", "plain text", "model", "full", False, 100,
+                EventCaptureProcess(), ".", "plain text", "model", "full", False, 100,
             ))
         self.assertEqual(len(payloads), 2)
         factory.assert_called_once_with(json_serialize=oa._compact_json)

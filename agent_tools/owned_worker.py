@@ -9,13 +9,15 @@ from functools import partial
 from typing import ParamSpec, TypeVar
 
 
-_P = ParamSpec("_P")
-_T = TypeVar("_T")
+_WorkerParams = ParamSpec("_WorkerParams")
+_WorkerResult = TypeVar("_WorkerResult")
 
 
 async def run_owned_worker(
-    operation: Callable[_P, _T], *args: _P.args, **kwargs: _P.kwargs,
-) -> _T:
+    operation: Callable[_WorkerParams, _WorkerResult],
+    *args: _WorkerParams.args,
+    **kwargs: _WorkerParams.kwargs,
+) -> _WorkerResult:
     """Finish an owned thread operation before returning or propagating cancel.
 
     Copying the caller's ContextVars preserves the permission scope. Unlike a

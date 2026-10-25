@@ -35,7 +35,7 @@ class PromptPayloadDedupTests(unittest.TestCase):
 
     def test_identical_reports_keep_every_plan_mapping_with_one_evidence_copy(self):
         report = "Verified every target; command test.exe; exit 0; warnings 0.\n" * 40
-        plan = flexible.Plan("", tuple(flexible.Subtask("mid", f"scope {i}") for i in range(3)))
+        plan = flexible.Plan("", tuple(flexible.Subtask("mid", f"scope {index}") for index in range(3)))
         worker = "\n".join(flexible.build_subtask_sections("all scopes", plan, 2, [report, report]).values())
         merge = flexible.build_merge_prompt("all scopes", plan, [report, report, "final evidence"],
                                             collaborative=False, blocked=(1,))

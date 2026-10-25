@@ -588,10 +588,10 @@ class SignalBot(BotPlatform):
         self._receive_subscription = None
         self._receive_subscribed = False
         self._receive_ready.clear()
-        for request_id, fut in list(self._jsonrpc_pending.items()):
+        for request_id, future in list(self._jsonrpc_pending.items()):
             self._jsonrpc_pending.pop(request_id, None)
-            if not fut.done():
-                fut.set_exception(SignalCliError("signal-cli JSON-RPC stopped"))
+            if not future.done():
+                future.set_exception(SignalCliError("signal-cli JSON-RPC stopped"))
         if (
             reader_task is not None
             and reader_task is not asyncio.current_task()
@@ -640,9 +640,9 @@ class SignalBot(BotPlatform):
                     continue
                 if "id" in payload:
                     request_id = str(payload.get("id"))
-                    fut = self._jsonrpc_pending.pop(request_id, None)
-                    if fut is not None and not fut.done():
-                        fut.set_result(payload)
+                    future = self._jsonrpc_pending.pop(request_id, None)
+                    if future is not None and not future.done():
+                        future.set_result(payload)
                     continue
                 if payload.get("method") == "receive":
                     task = asyncio.create_task(
@@ -673,10 +673,10 @@ class SignalBot(BotPlatform):
                     "signal-cli JSON-RPC %s closed",
                     self._jsonrpc_endpoint_name(),
                 )
-            for request_id, fut in list(self._jsonrpc_pending.items()):
+            for request_id, future in list(self._jsonrpc_pending.items()):
                 self._jsonrpc_pending.pop(request_id, None)
-                if not fut.done():
-                    fut.set_exception(
+                if not future.done():
+                    future.set_exception(
                         SignalCliError("signal-cli JSON-RPC stdout closed")
                     )
             self._schedule_jsonrpc_reconnect()
@@ -824,8 +824,8 @@ class SignalBot(BotPlatform):
         loop = asyncio.get_running_loop()
         self._jsonrpc_next_id += 1
         request_id = str(self._jsonrpc_next_id)
-        fut: asyncio.Future = loop.create_future()
-        self._jsonrpc_pending[request_id] = fut
+        future: asyncio.Future = loop.create_future()
+        self._jsonrpc_pending[request_id] = future
         request: dict[str, Any] = {
             "jsonrpc": "2.0",
             "method": method,
@@ -841,13 +841,13 @@ class SignalBot(BotPlatform):
                 async with self._jsonrpc_write_lock:
                     writer.write(line.encode("utf-8"))
                     await writer.drain()
-                response = await fut
+                response = await future
         except BaseException:
             self._jsonrpc_pending.pop(request_id, None)
-            if not fut.done():
-                fut.cancel()
-            elif not fut.cancelled():
-                fut.exception()
+            if not future.done():
+                future.cancel()
+            elif not future.cancelled():
+                future.exception()
             raise
         if not isinstance(response, dict):
             raise SignalCliError("invalid JSON-RPC response")
@@ -945,12 +945,12 @@ class SignalBot(BotPlatform):
         if upload_dir is None:
             return
 
-        for att in attachments:
-            if not isinstance(att, dict):
+        for attachment in attachments:
+            if not isinstance(attachment, dict):
                 continue
             try:
                 info = await self._materialize_attachment(
-                    att, group_id, upload_dir, caption,
+                    attachment, group_id, upload_dir, caption,
                 )
             except UploadTooLargeError:
                 try:
@@ -963,11 +963,11 @@ class SignalBot(BotPlatform):
                         reply_error,
                     )
                 continue
-            except Exception as e:
-                logger.warning("Failed to import Signal attachment: %s", e)
+            except Exception as exc:
+                logger.warning("Failed to import Signal attachment: %s", exc)
                 try:
                     await ctx_for_reply.reply_text(
-                        f"Failed to download attachment: {e}"
+                        f"Failed to download attachment: {exc}"
                     )
                 except Exception as reply_error:
                     logger.warning(
@@ -983,15 +983,15 @@ class SignalBot(BotPlatform):
 
     async def _materialize_attachment(
         self,
-        att: dict[str, Any],
+        attachment: dict[str, Any],
         group_id: str,
         upload_dir: str,
         caption: str,
     ) -> AttachmentInfo | None:
-        filename = _attachment_filename(att)
-        self._check_upload_size(_attachment_declared_size(att))
-        source_path = _resolve_attachment_local_path(att)
-        attachment_id = "" if source_path else _attachment_id(att)
+        filename = _attachment_filename(attachment)
+        self._check_upload_size(_attachment_declared_size(attachment))
+        source_path = _resolve_attachment_local_path(attachment)
+        attachment_id = "" if source_path else _attachment_id(attachment)
         if not source_path and not attachment_id:
             return None
 
@@ -1013,7 +1013,7 @@ class SignalBot(BotPlatform):
         return AttachmentInfo(
             local_path,
             filename,
-            attachment_kind_from_mime(att.get("contentType")),
+            attachment_kind_from_mime(attachment.get("contentType")),
             caption,
         )
 
@@ -1048,13 +1048,13 @@ class SignalBot(BotPlatform):
         for index, group_url in enumerate(self.group_urls, 1):
             try:
                 group_id = await self._resolve_group_id(group_url, groups=groups)
-            except Exception as e:
-                if isinstance(e, (SignalAccountError, PlatformNotReadyError)) or _is_jsonrpc_transport_error(e):
+            except Exception as exc:
+                if isinstance(exc, (SignalAccountError, PlatformNotReadyError)) or _is_jsonrpc_transport_error(exc):
                     raise
-                last_error = e
+                last_error = exc
                 logger.warning(
                     "Skipping Signal group URL %d/%d: %s",
-                    index, total, _safe_error_message(e),
+                    index, total, _safe_error_message(exc),
                 )
                 continue
             resolved[group_url] = group_id
@@ -1075,8 +1075,8 @@ class SignalBot(BotPlatform):
         try:
             joined = await self._rpc_request("joinGroup", {"uri": group_url})
             joined_group_id = _first_group_id_from_value(joined)
-        except SignalCliError as e:
-            if "already" not in str(e).casefold():
+        except SignalCliError as exc:
+            if "already" not in str(exc).casefold():
                 raise
 
         group = await self._find_group_by_url(group_url)
@@ -1840,10 +1840,10 @@ def _attachment_payload(value: Any) -> str:
     raise SignalCliError("signal-cli getAttachment returned no payload")
 
 
-def _attachment_declared_size(att: dict[str, Any]) -> int | None:
+def _attachment_declared_size(attachment: dict[str, Any]) -> int | None:
     """Return a usable signal-cli attachment byte count, when provided."""
     for key in ("size", "fileSize", "length"):
-        value = att.get(key)
+        value = attachment.get(key)
         if (
             isinstance(value, int)
             and not isinstance(value, bool)
@@ -1899,7 +1899,7 @@ def _find_key(value: Any, key: str) -> Any:
     return None
 
 
-def _attachment_filename(att: dict[str, Any]) -> str:
+def _attachment_filename(attachment: dict[str, Any]) -> str:
     for key in (
         "fileName",
         "filename",
@@ -1908,17 +1908,17 @@ def _attachment_filename(att: dict[str, Any]) -> str:
         "localPath",
         "path",
     ):
-        value = att.get(key)
+        value = attachment.get(key)
         if isinstance(value, str) and value.strip():
             return os.path.basename(value.strip())
-    attachment_id = _attachment_id(att) or "attachment"
-    ext = _extension_for_content_type(att.get("contentType"))
+    attachment_id = _attachment_id(attachment) or "attachment"
+    ext = _extension_for_content_type(attachment.get("contentType"))
     return f"signal_{attachment_id}{ext}"
 
 
-def _attachment_id(att: dict[str, Any]) -> str:
+def _attachment_id(attachment: dict[str, Any]) -> str:
     for key in ("id", "attachmentId", "attachmentPointerId", "storedFilename"):
-        text = _signal_id_text(att.get(key))
+        text = _signal_id_text(attachment.get(key))
         if text:
             if key == "storedFilename":
                 text = os.path.basename(text)
@@ -1926,16 +1926,16 @@ def _attachment_id(att: dict[str, Any]) -> str:
     return ""
 
 
-def _attachment_local_path(att: dict[str, Any]) -> str:
+def _attachment_local_path(attachment: dict[str, Any]) -> str:
     for key in ("path", "localPath", "storedFilename"):
-        value = att.get(key)
+        value = attachment.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
 
 
-def _resolve_attachment_local_path(att: dict[str, Any]) -> str:
-    raw_path = _attachment_local_path(att)
+def _resolve_attachment_local_path(attachment: dict[str, Any]) -> str:
+    raw_path = _attachment_local_path(attachment)
     if not raw_path:
         return ""
 

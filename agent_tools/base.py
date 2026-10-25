@@ -513,10 +513,10 @@ def summarize_arg(
         value = str(value)
     if len(value) <= max_chars:
         return f"{action}: {value}"
-    _marker = "… [clipped]"
-    if max_chars <= len(_marker):
+    marker = "… [clipped]"
+    if max_chars <= len(marker):
         return f"{action}: {value[:max(0, max_chars - 1)]}…" if max_chars > 1 else f"{action}: {'…'[:max_chars]}"
-    return f"{action}: {value[:max_chars - len(_marker)]}{_marker}"
+    return f"{action}: {value[:max_chars - len(marker)]}{marker}"
 
 
 def iter_workspace_files(

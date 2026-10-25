@@ -79,7 +79,7 @@ class FlexibleOwnerErrorReopenTests(unittest.IsolatedAsyncioTestCase):
         async with execution_state.execution_scope(self.ws, "bounded-reopen", self.request):
             saved = await execution_state.record("flexible_plan")
             await saved.save(owner_mode=True, queue=[{"tier": "low", "instruction": self.request}],
-                             owner_obligations={}, owner_error_audit=["old " + str(i) for i in range(20)],
+                             owner_obligations={}, owner_error_audit=["old " + str(index) for index in range(20)],
                              worker_errors=[self.old_error + "x" * 7000], output={})
             await agent._continue_flexible_owner("Finish retained scope", "Prior verified artifact proof")
             self.assertEqual(len(saved.get("owner_error_audit")), 8)

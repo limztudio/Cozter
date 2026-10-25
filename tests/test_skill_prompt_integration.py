@@ -267,7 +267,7 @@ class NativeSkillRefreshTests(unittest.IsolatedAsyncioTestCase):
         self.skill_path.write_text("# Checks\nCurrent check workflow.", encoding="utf-8")
 
     async def test_all_native_backends_reread_instruction_survives_exact_session_resume(self):
-        for _module, backend, _model in native_turns._CASES:
+        for _module, backend, _model in native_turns.CASES:
             with self.subTest(backend=backend.name):
                 sid = self._conversation()
                 await self._turn(backend.name, "FIRST-SKILL-REQUEST", sid=sid)

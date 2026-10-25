@@ -13,7 +13,7 @@ from Cozter.backends_agent.base import AgentResult
 from Cozter.tests import test_native_session_turns as native_turns
 
 
-_CASES = native_turns._CASES
+CASES = native_turns.CASES
 _SERIAL_PLAN = "[PLAN]\n1. [low] Inspect the requested target.\n2. [high] Repair and verify it.\n[/PLAN]"
 
 
@@ -110,7 +110,7 @@ class FlexibleNativeSessionsTests(unittest.IsolatedAsyncioTestCase):
             await backend.cleanup_process(process)
 
     async def test_all_four_reuse_native_writer_across_roles_and_completed_flexible_jobs(self):
-        for module, cls, _model in _CASES:
+        for module, cls, _model in CASES:
             with self.subTest(backend=cls.name):
                 self._select_workers(cls.name)
                 self.plan = _SERIAL_PLAN
@@ -202,7 +202,7 @@ class FlexibleNativeSessionsTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(later["prompt"].count("MERGED-ANSWER-MARKER-1"), 1)
 
     async def test_confirmed_missing_writer_restores_shared_context_for_all_four(self):
-        for _module, cls, _model in _CASES:
+        for _module, cls, _model in CASES:
             with self.subTest(backend=cls.name):
                 self._select_workers(cls.name)
                 self.plan = _SERIAL_PLAN

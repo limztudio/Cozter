@@ -10,7 +10,7 @@ from Cozter.tests.helpers import persist_queue_entry
 
 from Cozter import agent, flexible, session, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
-from Cozter.tests.test_reply_delivery import _ReplyDeliveryBot
+from Cozter.tests.test_reply_delivery import ReplyDeliveryBot
 
 
 class PrerequisiteCheckpointTests(unittest.IsolatedAsyncioTestCase):
@@ -21,7 +21,7 @@ class PrerequisiteCheckpointTests(unittest.IsolatedAsyncioTestCase):
                     await self.check_blocked_checkpoint(ws, tail=tail)
 
     async def check_blocked_checkpoint(self, ws, *, tail):
-        bot = _ReplyDeliveryBot(ws, fail_final=False)
+        bot = ReplyDeliveryBot(ws, fail_final=False)
         sid = session.create_session(ws, name="Durable prerequisite recovery")["id"]
         original = "Repair sources, verify local tests and exercise the visible desktop."
         entry = await persist_queue_entry(bot, "u1", original, "chat")
@@ -102,7 +102,7 @@ class PrerequisiteCheckpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row["id"] for row in bot._read_queue_file()["u1"]], [entry, later])
         self.assertIn("u1", bot._paused_jobs)
         self.assertFalse(bot.has_active_turns())
-        restarted = _ReplyDeliveryBot(ws, fail_final=False)
+        restarted = ReplyDeliveryBot(ws, fail_final=False)
         with mock.patch.object(restarted, "_start_queue_drain"):
             await restarted.restore_queues()
         restored = await restarted._load_job_checkpoint("u1", entry)

@@ -84,10 +84,10 @@ class WebSearchTool(AgentTool):
                                 f"{host}: HTTP {response.status}",
                             )
                         else:
-                            body, _search_capped = await read_bounded_text(
+                            body, search_capped = await read_bounded_text(
                                 response,
                             )
-                            if _search_capped:
+                            if search_capped:
                                 body += "<!-- … [fetch capped at 5 MB — preview only] -->"
                             saw_local_page = True
                             # This pure parse has a byte-capped input and
@@ -210,8 +210,8 @@ def _is_ad_or_internal(raw_href: str) -> bool:
 
 def _ddg_unwrap_url(url: str) -> str:
     parsed = urllib.parse.urlparse(url)
-    qs = urllib.parse.parse_qs(parsed.query)
-    unwrapped = qs.get("uddg")
+    query_params = urllib.parse.parse_qs(parsed.query)
+    unwrapped = query_params.get("uddg")
     if unwrapped:
         first = unwrapped[0]
         url = first if isinstance(first, str) and first else url

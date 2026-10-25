@@ -133,7 +133,7 @@ class ReadFilesTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch.object(read_files.ReadFileTool, "run", side_effect=read):
             result = await read_files.ReadFilesTool().run("/workspace", {
-                "files": [{"path": f"file-{i}.txt"} for i in range(16)],
+                "files": [{"path": f"file-{index}.txt"} for index in range(16)],
             })
         self.assertEqual(peak, read_files._MAX_PARALLEL_READS)
         self.assertLessEqual(len(result), read_files._MAX_RESULT_CHARS)

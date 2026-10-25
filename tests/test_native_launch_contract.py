@@ -10,7 +10,7 @@ import unittest
 
 from Cozter import process_launch
 from Cozter.backends_agent import base, claude_code, codex, copilot, grok
-from Cozter.tests.test_runtime_diagnostics import _load_main_module
+from Cozter.tests.test_runtime_diagnostics import load_main_module
 
 
 class NativeLaunchContractTests(unittest.TestCase):
@@ -34,7 +34,7 @@ class NativeLaunchContractTests(unittest.TestCase):
         self.assertNotIn("mark_group", inspect.signature(process_launch.create_piped_subprocess).parameters)
 
     def test_single_dash_cli_alias_is_rejected_and_current_flag_is_accepted(self):
-        main = _load_main_module()
+        main = load_main_module()
         main._validate_launch_args(["--cli"])
         with self.assertRaises(SystemExit) as raised:
             main._validate_launch_args(["-cli"])

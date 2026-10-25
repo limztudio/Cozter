@@ -12,7 +12,7 @@ from unittest import mock
 from Cozter import agent_tools, backends_agent, config, execution_state, process_observation, supervision, utils
 from Cozter.backends_agent import _openai_agent as oa
 from Cozter.tests.helpers import OfflineHttpBackend
-from Cozter.tests.test_http_execution_continuation import _call
+from Cozter.tests.test_http_execution_continuation import make_tool_call
 
 
 def _decision(verdict="uncertain", **changes):
@@ -33,10 +33,10 @@ class HangDiagnosisBackendTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("matching target state", prompt)
                 self.assertIn("Do not repeat the same inconclusive checks", prompt)
                 self.assertIn("Previous review did not inspect directory children", prompt)
-                return "", "", [_call("inspect-parent", "list_dir", "crashes")]
+                return "", "", [make_tool_call("inspect-parent", "list_dir", "crashes")]
             if len(payloads) == 2:
                 self.assertEqual(payload["messages"][-1]["content"], "packages/")
-                return "", "", [_call("inspect-children", "list_dir", "crashes/packages")]
+                return "", "", [make_tool_call("inspect-children", "list_dir", "crashes/packages")]
             self.assertEqual(payload["messages"][-1]["content"], "evidence.nwbcrashpkg")
             return json.dumps(_decision(
                 "confirmed_hang", evidence="crashes/packages contains evidence.nwbcrashpkg; command omits -Recurse",
@@ -110,7 +110,7 @@ class HangDiagnosisBackendTests(unittest.IsolatedAsyncioTestCase):
         async def stream(_endpoint, payload, *_args, **_kwargs):
             payloads.append(copy.deepcopy(payload))
             if "tools" in payload:
-                return "", "", [_call(str(len(payloads)), path=f"file-{len(payloads)}.txt")]
+                return "", "", [make_tool_call(str(len(payloads)), path=f"file-{len(payloads)}.txt")]
             return json.dumps(_decision()), "", []
 
         with (

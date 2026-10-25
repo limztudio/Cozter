@@ -346,83 +346,83 @@ def _parse_patch(
     return patches
 
 
-def _apply_file_patch(workspace_path: str, fp: _FilePatch) -> str:
-    label = fp.new_path or fp.old_path or "?"
+def _apply_file_patch(workspace_path: str, file_patch: _FilePatch) -> str:
+    label = file_patch.new_path or file_patch.old_path or "?"
 
-    if fp.new_path is None and fp.old_path is not None:
+    if file_patch.new_path is None and file_patch.old_path is not None:
         try:
             # Delete the named entry; following a final symlink here would
             # remove its target while leaving a dangling link behind.
-            target = resolve_workspace_entry(workspace_path, fp.old_path)
+            target = resolve_workspace_entry(workspace_path, file_patch.old_path)
         except ValueError as exc:
-            return f"{fp.old_path}: skipped ({exc})"
+            return f"{file_patch.old_path}: skipped ({exc})"
         if not os.path.isfile(target):
-            return f"{fp.old_path}: already absent"
+            return f"{file_patch.old_path}: already absent"
         try:
             file_lines, _had_final_newline, _uses_crlf = _read_file_lines(target)
         except _FileLimitError as exc:
-            return f"{fp.old_path}: {exc}; not deleted"
+            return f"{file_patch.old_path}: {exc}; not deleted"
         except UnicodeDecodeError:
-            return f"{fp.old_path}: not valid UTF-8 (binary?); not deleted"
-        applied = _apply_hunks(file_lines, fp.hunks)
+            return f"{file_patch.old_path}: not valid UTF-8 (binary?); not deleted"
+        applied = _apply_hunks(file_lines, file_patch.hunks)
         if isinstance(applied, str):
-            return f"{fp.old_path}: {applied}; not deleted"
+            return f"{file_patch.old_path}: {applied}; not deleted"
         if applied:
-            return f"{fp.old_path}: deletion patch did not remove all content"
+            return f"{file_patch.old_path}: deletion patch did not remove all content"
         os.remove(target)
-        return f"{fp.old_path}: deleted"
+        return f"{file_patch.old_path}: deleted"
 
-    if fp.new_path is None:
+    if file_patch.new_path is None:
         return f"{label}: skipped (no target path)"
 
     try:
-        target = resolve_inside_workspace(workspace_path, fp.new_path)
+        target = resolve_inside_workspace(workspace_path, file_patch.new_path)
     except ValueError as exc:
-        return f"{fp.new_path}: skipped ({exc})"
+        return f"{file_patch.new_path}: skipped ({exc})"
 
-    if fp.old_path is None:
+    if file_patch.old_path is None:
         new_lines: list[str] = []
-        for hunk in fp.hunks:
+        for hunk in file_patch.hunks:
             new_lines.extend(hunk.new)
         out = "\n".join(new_lines)
-        if new_lines and _new_file_ends_with_newline(fp.hunks, default=True):
+        if new_lines and _new_file_ends_with_newline(file_patch.hunks, default=True):
             out += "\n"
         output_error = _output_limit_error(
             out, len(new_lines), uses_crlf=False,
         )
         if output_error is not None:
-            return f"{fp.new_path}: skipped ({output_error})"
+            return f"{file_patch.new_path}: skipped ({output_error})"
         ensure_parent_dir(target)
         # No-clobber: partial writes stay hidden.
         if not create_text_file_atomically(target, out, uses_crlf=False):
-            return f"{fp.new_path}: skipped (file already exists)"
-        return f"{fp.new_path}: created ({len(new_lines)} lines)"
+            return f"{file_patch.new_path}: skipped (file already exists)"
+        return f"{file_patch.new_path}: created ({len(new_lines)} lines)"
 
     if not os.path.isfile(target):
-        return f"{fp.new_path}: skipped (file not found)"
+        return f"{file_patch.new_path}: skipped (file not found)"
     try:
         file_lines, had_final_newline, uses_crlf = _read_file_lines(target)
     except _FileLimitError as exc:
-        return f"{fp.new_path}: skipped ({exc})"
+        return f"{file_patch.new_path}: skipped ({exc})"
     except UnicodeDecodeError:
-        return f"{fp.new_path}: not valid UTF-8 (binary?); not patched"
+        return f"{file_patch.new_path}: not valid UTF-8 (binary?); not patched"
 
-    applied = _apply_hunks(file_lines, fp.hunks)
+    applied = _apply_hunks(file_lines, file_patch.hunks)
     if isinstance(applied, str):
-        return f"{fp.new_path}: {applied}"
+        return f"{file_patch.new_path}: {applied}"
 
     out = "\n".join(applied)
     if applied and _new_file_ends_with_newline(
-        fp.hunks, default=had_final_newline or not file_lines,
+        file_patch.hunks, default=had_final_newline or not file_lines,
     ):
         out += "\n"
     output_error = _output_limit_error(
         out, len(applied), uses_crlf=uses_crlf,
     )
     if output_error is not None:
-        return f"{fp.new_path}: skipped ({output_error})"
+        return f"{file_patch.new_path}: skipped ({output_error})"
     write_text_after_edit(target, out, uses_crlf=uses_crlf)
-    return f"{fp.new_path}: applied {len(fp.hunks)} hunk(s)"
+    return f"{file_patch.new_path}: applied {len(file_patch.hunks)} hunk(s)"
 
 
 def _read_file_lines(path: str) -> tuple[list[str], bool, bool]:

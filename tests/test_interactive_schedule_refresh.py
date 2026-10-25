@@ -14,8 +14,8 @@ from Cozter import agent, flexible, schedules, session, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
 from Cozter.backends_bot.base import BotPlatform, MessageHandle, _RecoverableTurnStatus
 from Cozter.tests.helpers import persist_queue_entry, OfflineBot
-from Cozter.tests.test_agent_post_turn import _ImmediateBackend
-from Cozter.tests.test_reply_delivery import _ReplyDeliveryBot
+from Cozter.tests.test_agent_post_turn import ImmediateBackend
+from Cozter.tests.test_reply_delivery import ReplyDeliveryBot
 
 
 class InteractiveContinuationTests(unittest.IsolatedAsyncioTestCase):
@@ -29,7 +29,7 @@ class InteractiveContinuationTests(unittest.IsolatedAsyncioTestCase):
         for scheduled in (False, True):
             with (
                 self.subTest(scheduled=scheduled),
-                mock.patch.object(agent.backends_agent, "get_backend", return_value=_ImmediateBackend()),
+                mock.patch.object(agent.backends_agent, "get_backend", return_value=ImmediateBackend()),
                 mock.patch.object(agent, "_drive_backend", new=mock.AsyncMock(
                     return_value=(AgentResult(text="Completed"), False),
                 )),
@@ -46,7 +46,7 @@ class InteractiveContinuationTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0)
 
     async def test_pinned_bot_turn_preserves_background_and_delivery_ownership(self):
-        bot = _ReplyDeliveryBot(self.ws, fail_final=False)
+        bot = ReplyDeliveryBot(self.ws, fail_final=False)
         for scheduled in (False, True):
             result = AgentResult(text="Completed", session_id=self.sid)
             with (
@@ -68,7 +68,7 @@ class InteractiveContinuationTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(deliver.call_args.kwargs['awaiting_uid'], None if scheduled else "u1")
 
     async def test_checkpoint_continuation_retains_interactive_flag(self):
-        bot = _ReplyDeliveryBot(self.ws, fail_final=False)
+        bot = ReplyDeliveryBot(self.ws, fail_final=False)
         flags = []
         sessions = []
 
@@ -94,7 +94,7 @@ class ScheduleWorkspaceTests(unittest.IsolatedAsyncioTestCase):
         self.origin = self.enterContext(tempfile.TemporaryDirectory())
         self.other = self.enterContext(tempfile.TemporaryDirectory())
         self.enterContext(mock.patch.object(workspace, "CONFIG_DIR", self.origin))
-        self.bot = _ReplyDeliveryBot(self.origin, fail_final=False)
+        self.bot = ReplyDeliveryBot(self.origin, fail_final=False)
 
     async def test_admission_pins_origin_before_first_execution_and_restart(self):
         schedule = {'id': 'calendar', 'days': [16], 'time': '09:00',
@@ -113,7 +113,7 @@ class ScheduleWorkspaceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(os.path.normcase(entry['job']['workspace_path']), os.path.normcase(self.origin))
 
         # Simulate /open B followed by process restart before any session exists.
-        restarted = _ReplyDeliveryBot(self.other, fail_final=False)
+        restarted = ReplyDeliveryBot(self.other, fail_final=False)
         calls = []
 
         async def run(_uid, _chat, _text, **kwargs):
@@ -259,7 +259,7 @@ class DetachedLoggingAndStatusTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(lock.locked())
 
     async def test_live_status_retains_five_lines_and_full_omitted_count(self):
-        class StatusBot(_ReplyDeliveryBot):
+        class StatusBot(ReplyDeliveryBot):
             async def send_text(self, _chat, _text, *, rich=False):
                 return MessageHandle(chat_id=_chat, message_id='thinking')
 

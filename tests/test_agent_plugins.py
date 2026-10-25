@@ -905,7 +905,7 @@ class MemoryToolTests(unittest.TestCase):
         self.assertNotIn("badfile", result)
 
 
-class _FakeResponse:
+class FakeResponse:
     charset = "utf-8"
 
     def __init__(
@@ -924,15 +924,15 @@ class _FakeResponse:
         }
         self.content = BytesContent(body)
 
-    async def __aenter__(self) -> _FakeResponse:
+    async def __aenter__(self) -> FakeResponse:
         return self
 
     async def __aexit__(self, *exc: object) -> bool:
         return False
 
 
-class _FakeSession:
-    def __init__(self, responses: list[_FakeResponse]) -> None:
+class FakeSession:
+    def __init__(self, responses: list[FakeResponse]) -> None:
         self.responses = list(responses)
         self.calls: list[dict] = []
 
@@ -945,8 +945,8 @@ class HttpRequestToolTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tool = HttpRequestTool()
 
-    def run_with(self, responses: list[_FakeResponse], **args: object):
-        session = _FakeSession(responses)
+    def run_with(self, responses: list[FakeResponse], **args: object):
+        session = FakeSession(responses)
 
         @asynccontextmanager
         async def fake_open():
@@ -961,7 +961,7 @@ class HttpRequestToolTests(unittest.TestCase):
     def test_get_returns_status_and_json_body(self) -> None:
         result, session = self.run_with(
             [
-                _FakeResponse(
+                FakeResponse(
                     status=200,
                     url="https://api.example.com/v1/things",
                     headers={"Content-Type": "application/json"},
@@ -979,7 +979,7 @@ class HttpRequestToolTests(unittest.TestCase):
     def test_error_status_body_is_shown(self) -> None:
         result, _ = self.run_with(
             [
-                _FakeResponse(
+                FakeResponse(
                     status=404,
                     url="https://api.example.com/v1/missing",
                     headers={"Content-Type": "application/json"},
@@ -1001,7 +1001,7 @@ class HttpRequestToolTests(unittest.TestCase):
     def test_post_sniffs_json_content_type(self) -> None:
         result, session = self.run_with(
             [
-                _FakeResponse(
+                FakeResponse(
                     status=201,
                     url="https://api.example.com/v1/things",
                     headers={"Content-Type": "application/json"},
@@ -1024,7 +1024,7 @@ class HttpRequestToolTests(unittest.TestCase):
     def test_custom_headers_pass_hop_by_hop_filtered(self) -> None:
         _, session = self.run_with(
             [
-                _FakeResponse(
+                FakeResponse(
                     status=200,
                     url="https://api.example.com/",
                     headers={"Content-Type": "text/plain"},
@@ -1048,12 +1048,12 @@ class HttpRequestToolTests(unittest.TestCase):
     def test_redirect_downgrades_post_to_get(self) -> None:
         result, session = self.run_with(
             [
-                _FakeResponse(
+                FakeResponse(
                     status=303,
                     url="https://api.example.com/old",
                     headers={"Location": "https://api.example.com/new"},
                 ),
-                _FakeResponse(
+                FakeResponse(
                     status=200,
                     url="https://api.example.com/new",
                     headers={"Content-Type": "application/json"},
@@ -1082,11 +1082,11 @@ class HttpRequestToolTests(unittest.TestCase):
             with self.subTest(next_url=next_url):
                 _, session = self.run_with(
                     [
-                        _FakeResponse(
+                        FakeResponse(
                             status=307, url="https://api.example.com/old",
                             headers={"Location": next_url},
                         ),
-                        _FakeResponse(status=200, url=next_url, body=b"ok"),
+                        FakeResponse(status=200, url=next_url, body=b"ok"),
                     ],
                     url="https://api.example.com/old",
                     headers={
@@ -1105,11 +1105,11 @@ class HttpRequestToolTests(unittest.TestCase):
     def test_credentials_are_not_restored_when_redirect_returns_to_original_origin(self) -> None:
         _, session = self.run_with(
             [
-                _FakeResponse(status=302, url="https://api.example.com/old",
+                FakeResponse(status=302, url="https://api.example.com/old",
                               headers={"Location": "https://other.example.com/middle"}),
-                _FakeResponse(status=302, url="https://other.example.com/middle",
+                FakeResponse(status=302, url="https://other.example.com/middle",
                               headers={"Location": "https://api.example.com/new"}),
-                _FakeResponse(status=200, url="https://api.example.com/new", body=b"ok"),
+                FakeResponse(status=200, url="https://api.example.com/new", body=b"ok"),
             ],
             url="https://api.example.com/old", headers={"Authorization": "Bearer token"},
         )
@@ -1120,7 +1120,7 @@ class HttpRequestToolTests(unittest.TestCase):
     def test_redirect_to_private_host_refused(self) -> None:
         result, session = self.run_with(
             [
-                _FakeResponse(
+                FakeResponse(
                     status=302,
                     url="https://api.example.com/old",
                     headers={"Location": "http://10.0.0.5/steal"},
@@ -1133,7 +1133,7 @@ class HttpRequestToolTests(unittest.TestCase):
 
     def test_too_many_redirects_refused(self) -> None:
         responses = [
-            _FakeResponse(
+            FakeResponse(
                 status=302,
                 url=f"https://api.example.com/hop{index}",
                 headers={
@@ -1150,7 +1150,7 @@ class HttpRequestToolTests(unittest.TestCase):
     def test_binary_content_type_hidden(self) -> None:
         result, _ = self.run_with(
             [
-                _FakeResponse(
+                FakeResponse(
                     status=200,
                     url="https://api.example.com/image.png",
                     headers={"Content-Type": "image/png"},
@@ -1198,7 +1198,7 @@ class HttpRequestToolTests(unittest.TestCase):
     def test_body_truncation_marks_preview_and_partial(self) -> None:
         result, _ = self.run_with(
             [
-                _FakeResponse(
+                FakeResponse(
                     status=200,
                     url="https://api.example.com/big",
                     headers={"Content-Type": "application/json"},

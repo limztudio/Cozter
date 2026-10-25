@@ -201,7 +201,7 @@ class MemoryReadPagingTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(result.startswith("Error:"), result)
             self.assertIn("non-negative integer", result)
 
-    async def test_oversized_metadata_does_not_offer_nonadvancing_cursor(self) -> None:
+    async def test_oversized_metadata_does_not_offer_non_advancing_cursor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             session_id = self.write_messages(tmp, 3, name="x" * 4_000)
             output = await memory.MemoryTool().run(tmp, {

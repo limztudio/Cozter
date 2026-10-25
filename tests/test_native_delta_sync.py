@@ -14,7 +14,7 @@ from Cozter.tests import test_native_session_turns as native_turns
 
 
 _REAL_DRIVE = agent._drive_backend_impl
-_CASES = native_turns._CASES
+CASES = native_turns.CASES
 
 
 class NativeDeltaSyncTests(unittest.IsolatedAsyncioTestCase):
@@ -129,7 +129,7 @@ class NativeDeltaSyncTests(unittest.IsolatedAsyncioTestCase):
         process.returncode = 0
 
     async def test_first_native_activity_is_durable_before_completion_and_reload_for_all_four(self):
-        for module, cls, _model in _CASES:
+        for module, cls, _model in CASES:
             with self.subTest(backend=cls.name):
                 sid = self._conversation()
                 self.mode = "hold-after-activity"
@@ -176,8 +176,8 @@ class NativeDeltaSyncTests(unittest.IsolatedAsyncioTestCase):
                 if module is copilot:
                     self.assertEqual(returned["home"], first_launch["home"])
 
-    async def test_initialization_and_prework_error_never_receipt_unprocessed_history_for_all_four(self):
-        for _module, cls, _model in _CASES:
+    async def test_initialization_and_pre_work_error_never_receipt_unprocessed_history_for_all_four(self):
+        for _module, cls, _model in CASES:
             with self.subTest(backend=cls.name):
                 sid = self._conversation()
                 self.mode = "error-before-work"
@@ -194,7 +194,7 @@ class NativeDeltaSyncTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn(marker, accepted["prompt"])
 
     async def test_flexible_skips_delivered_user_request_but_supplies_unseen_merged_reply_for_all_four(self):
-        for module, cls, _model in _CASES:
+        for module, cls, _model in CASES:
             with self.subTest(backend=cls.name):
                 sid = self._conversation()
                 self.worker_name = cls.name
@@ -248,7 +248,7 @@ class NativeDeltaSyncTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(returned["prompt"].count(marker), 1)
 
     async def test_stderr_missing_session_before_events_retries_once_with_full_bootstrap_for_all_four(self):
-        for module, cls, _model in _CASES:
+        for module, cls, _model in CASES:
             with self.subTest(backend=cls.name):
                 sid = self._conversation()
                 await self._turn(cls.name, "BEFORE-STDERR-MISSING-REQUEST", sid=sid)

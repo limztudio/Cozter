@@ -493,8 +493,8 @@ class CopilotBackend(Backend):
             await record.save(native_candidate_session_id=candidate_id)
 
         # Native vision via --attachment flags.
-        for _image_path in image_paths:
-            cmd += ["--attachment", _image_path]
+        for image_path in image_paths:
+            cmd += ["--attachment", image_path]
 
         isolated_home = (
             native_home if native_home is not None

@@ -645,8 +645,8 @@ class ClaudeCodeBackend(Backend):
 
         # Native vision: marker + prompt hint deliver.
         if self.supports_vision and not compaction:
-            _vision_hint_paths = attachment_image_paths(prompt, workspace_path)
-            if _vision_hint_paths:
+            vision_hint_paths = attachment_image_paths(prompt, workspace_path)
+            if vision_hint_paths:
                 prompt = (
                     prompt
                     + "\n\n[Vision: the image(s) above are attached to this"

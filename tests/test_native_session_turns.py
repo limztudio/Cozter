@@ -14,7 +14,7 @@ from Cozter.backends_agent import claude_code, codex, copilot, grok
 from Cozter.backends_agent.base import SHELL_INPUT_RULE, AgentResult
 
 
-_CASES = (
+CASES = (
     (codex, codex.CodexBackend, "gpt-6.1-sol"),
     (claude_code, claude_code.ClaudeCodeBackend, "opus"),
     (copilot, copilot.CopilotBackend, "fixture-model"),
@@ -27,9 +27,9 @@ class NativeSessionTurnsTests(unittest.IsolatedAsyncioTestCase):
         self.ws = self.enterContext(tempfile.TemporaryDirectory())
         account_home = self.enterContext(tempfile.TemporaryDirectory())
         self.enterContext(mock.patch.dict(os.environ, {"COPILOT_HOME": account_home}))
-        self.backends = {cls.name: cls() for _, cls, _ in _CASES}
-        self.models = {cls.name: model for _, cls, model in _CASES}
-        self.modules = {cls.name: module for module, cls, _ in _CASES}
+        self.backends = {cls.name: cls() for _, cls, _ in CASES}
+        self.models = {cls.name: model for _, cls, model in CASES}
+        self.modules = {cls.name: module for module, cls, _ in CASES}
         self.attempts: list[dict] = []
         self.launches: list[dict] = []
         self.serial = 0
@@ -53,7 +53,7 @@ class NativeSessionTurnsTests(unittest.IsolatedAsyncioTestCase):
             agent, "_judge_draft", new=mock.AsyncMock(return_value=(flexible.JudgeVerdict(False), False)),
         ))
         self.enterContext(mock.patch.object(agent, "_drive_backend_impl", side_effect=self._drive))
-        for module, cls, _ in _CASES:
+        for module, cls, _ in CASES:
             self.enterContext(mock.patch.object(module, "executable_command", return_value=[cls.name]))
             factory = "create_captured_subprocess" if module is grok else "create_prompt_subprocess"
             self.enterContext(mock.patch.object(module, factory, side_effect=self._create_process))
@@ -152,7 +152,7 @@ class NativeSessionTurnsTests(unittest.IsolatedAsyncioTestCase):
         return result
 
     async def test_all_four_resume_across_completed_jobs_without_repeating_own_context(self):
-        for module, cls, _model in _CASES:
+        for module, cls, _model in CASES:
             with self.subTest(backend=cls.name):
                 sid = self._conversation()
                 first = await self._turn(cls.name, "FIRST-REQUEST-MARKER")
@@ -256,7 +256,7 @@ class NativeSessionTurnsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.attempts[-1]["previous_id"], original_id)
 
     async def test_confirmed_missing_provider_retries_once_with_full_bootstrap_for_all_four(self):
-        for _module, cls, _model in _CASES:
+        for _module, cls, _model in CASES:
             with self.subTest(backend=cls.name):
                 sid = self._conversation()
                 await self._turn(cls.name, "BEFORE-MISSING-REQUEST", sid=sid)
@@ -300,7 +300,7 @@ class NativeSessionTurnsTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(attempts[1]["native_id"], original_id)
 
     async def test_missing_session_error_after_native_activity_never_replays_for_all_four(self):
-        for _module, cls, _model in _CASES:
+        for _module, cls, _model in CASES:
             with self.subTest(backend=cls.name):
                 sid = self._conversation()
                 await self._turn(cls.name, "COMPLETED-PRIOR-REQUEST", sid=sid)

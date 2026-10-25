@@ -601,14 +601,14 @@ def _explicit_attachment_sources(
 ) -> set[str]:
     """Return source paths already referenced by agent output."""
     sources: set[str] = set()
-    for ev in events:
-        if ev.kind == "attachment":
-            source_path = attachment_source_path(ev.content, workspace_path)
+    for event in events:
+        if event.kind == "attachment":
+            source_path = attachment_source_path(event.content, workspace_path)
             if source_path is not None:
                 sources.add(source_path)
-        elif ev.kind == "text":
+        elif event.kind == "text":
             _, source_paths = extract_attachment_sources(
-                ev.content, workspace_path,
+                event.content, workspace_path,
             )
             sources.update(source_paths)
     return sources
@@ -659,16 +659,16 @@ def extract_detached_task_requests(text: str) -> tuple[str, list[str]]:
 def _consume_detached_task_requests(result: AgentResult) -> None:
     """Move response markers into ``result`` before logging or delivery."""
     events: list[ChatEvent] = []
-    for ev in result.events:
-        if ev.kind != "text":
-            events.append(ev)
+    for event in result.events:
+        if event.kind != "text":
+            events.append(event)
             continue
-        cleaned, prompts = extract_detached_task_requests(ev.content)
+        cleaned, prompts = extract_detached_task_requests(event.content)
         for prompt in prompts:
             append_detached_task_request(result, prompt)
         if cleaned:
-            ev.content = cleaned
-            events.append(ev)
+            event.content = cleaned
+            events.append(event)
     result.events = events
 
     cleaned_text, prompts = extract_detached_task_requests(result.text)
@@ -687,10 +687,10 @@ def _valid_usage_number(value: object) -> bool:
         return False
 
 
-def _compact_tokens(n: int) -> str:
-    if isinstance(n, bool) or n < 0:
+def _compact_tokens(count: int) -> str:
+    if isinstance(count, bool) or count < 0:
         return "0"
-    return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
+    return f"{count / 1000:.1f}k" if count >= 1000 else str(count)
 
 
 def format_usage(usage: dict | None) -> str | None:
@@ -1476,7 +1476,7 @@ def _build_backend_prompt(
 _NATIVE_BACKENDS = frozenset({"codex", "claude_code", "copilot", "grok", "antigravity_cli"})
 
 
-class _NativeHangRecovered(Exception):
+class _NativeHangRecoveredError(Exception):
     """The owned CLI stopped after a confirmed hang; its native state survives."""
 
     def __init__(self, diagnosis: str, partial: AgentResult):
@@ -1485,7 +1485,7 @@ class _NativeHangRecovered(Exception):
         self.partial = partial
 
 
-class _NativeRecoveryDeferred(Exception):
+class _NativeRecoveryDeferredError(Exception):
     """A worker keeps its plan position while repeated recovery backs off."""
 
     def __init__(self, result: AgentResult):
@@ -1905,7 +1905,7 @@ async def _drive_backend(
                         execution.remember_native_response(state, _format_session_response(result, workspace_path))
                     carry_forward_turn_output(retained, result, workspace_path)
                     return result, restarting
-                except _NativeHangRecovered as exc:
+                except _NativeHangRecoveredError as exc:
                     diagnosis = exc.diagnosis[:8000]
                     guidance = (
                         "[Automatic hang recovery: the previous owned CLI and its child processes "
@@ -2031,7 +2031,7 @@ async def _drive_backend_impl(
         finally:
             await cancel_and_settle(task)
         if diagnosis is not None:
-            raise _NativeHangRecovered(diagnosis, partial)
+            raise _NativeHangRecoveredError(diagnosis, partial)
         return task.result()
 
 
@@ -2072,8 +2072,8 @@ async def _drive_backend_process(
         proc = await backend.launch(
             workspace_path, full_prompt, model, approval, effort=effort,
         )
-    except FileNotFoundError as e:
-        raise BackendUnavailableError(backend) from e
+    except FileNotFoundError as exc:
+        raise BackendUnavailableError(backend) from exc
     except (OSError, RuntimeError) as exc:
         # Surface launch failures instead of stranding queued work.
         result = AgentResult()
@@ -2136,8 +2136,8 @@ async def _drive_backend_process(
                 await on_native_activity()
 
             if on_event:
-                for ev in result.events[prev_count:]:
-                    await on_event(ev)
+                for new_event in result.events[prev_count:]:
+                    await on_event(new_event)
 
         await wait_for_process_exit(proc)
         completed_stream = True
@@ -3150,7 +3150,7 @@ async def _run_flexible(
             _accumulate_usage(usage_audit, sub_result.usage)
             worker_outputs[str(index)] = encode_output(sub_result, text=True)
             await save_progress()
-            raise _NativeRecoveryDeferred(sub_result)
+            raise _NativeRecoveryDeferredError(sub_result)
         if budget is not None:
             budget.capture(sub_result, workspace_path)
         if not restarting:
@@ -3376,7 +3376,7 @@ async def _run_flexible(
                     return await restart(result)
             else:
                 values = [await run_worker(done, earlier, parallel=False)]
-        except _NativeRecoveryDeferred as exc:
+        except _NativeRecoveryDeferredError as exc:
             carry_forward_turn_output(result, exc.result, workspace_path)
             exc.result.usage = usage_totals or None
             return exc.result, False
@@ -3396,7 +3396,7 @@ async def _run_flexible(
                 return result, False
             # Worker text is internal (feeds the merge).
             result.events.extend(
-                ev for ev in sub_result.events if ev.kind != "text"
+                event for event in sub_result.events if event.kind != "text"
             )
             for task_ref in sub_result.detached_tasks:
                 if task_ref not in result.detached_tasks:
@@ -4224,8 +4224,8 @@ def _interrupted_turn_note(turn: _InterruptedTurn) -> str:
     else:
         activity = next(
             (
-                ev.content for ev in reversed(turn.events)
-                if ev.kind in ("tool", "file") and ev.content.strip()
+                event.content for event in reversed(turn.events)
+                if event.kind in ("tool", "file") and event.content.strip()
             ),
             None,
         )
@@ -4639,8 +4639,8 @@ async def _run_turn_impl(
                 )
             result, restarting = await _run_phase(contextual_prompt, effective_prompt)
             result.completion_verified = False
-        except BackendUnavailableError as e:
-            return _error_result(session_id, str(e), inject_queue)
+        except BackendUnavailableError as exc:
+            return _error_result(session_id, str(exc), inject_queue)
 
         if restarting:
             await _announce_restart(
@@ -4660,8 +4660,8 @@ async def _run_turn_impl(
         judged_rounds = 0
         while judged_rounds < flexible.JUDGE_MAX_CONTINUES:
             draft = result.text
-            _draft_clean, draft_awaiting = extract_await(draft or "")
-            if result.error or draft_awaiting or not _draft_clean.strip():
+            draft_clean, draft_awaiting = extract_await(draft or "")
+            if result.error or draft_awaiting or not draft_clean.strip():
                 break
             verdict, judge_restarting = await _judge_draft(
                 effective_prompt, draft, workspace_path,
@@ -4718,8 +4718,8 @@ async def _run_turn_impl(
                     native_request=followup.strip(),
                 )
                 result.completion_verified = False
-            except BackendUnavailableError as e:
-                return _error_result(session_id, str(e), inject_queue)
+            except BackendUnavailableError as exc:
+                return _error_result(session_id, str(exc), inject_queue)
             if restarting:
                 await _announce_restart(
                     backend.name, injected, inject_queue, _stream_event,
@@ -4739,10 +4739,10 @@ async def _run_turn_impl(
                     raise _TurnBudgetExhaustedError(result.error)
             # Cap exhausted: keep the verdict for chaining.
             if judged_rounds >= flexible.JUDGE_MAX_CONTINUES:
-                _draft_tail, _tail_awaiting = extract_await(result.text or "")
-                if result.error or _tail_awaiting or not _draft_tail.strip():
+                draft_tail, tail_awaiting = extract_await(result.text or "")
+                if result.error or tail_awaiting or not draft_tail.strip():
                     break
-                _tail_verdict, _tail_restarting = await _judge_draft(
+                tail_verdict, tail_restarting = await _judge_draft(
                     effective_prompt, result.text or "", workspace_path,
                     summary_backend_name=summary_backend,
                     summary_model=summary_model,
@@ -4751,27 +4751,27 @@ async def _run_turn_impl(
                     on_event=_stream_event,
                     round_no=judged_rounds + 1,
                 )
-                if _tail_restarting:
+                if tail_restarting:
                     await _announce_restart(
                         backend.name, injected, inject_queue, _stream_event,
                     )
                     restarting = True
                     break
-                result.completion_verified = _tail_verdict.verified and not _tail_verdict.should_continue
-                if _tail_verdict.blocked:
-                    _retain_blocked_verdict(result, _tail_verdict, turn=turn)
+                result.completion_verified = tail_verdict.verified and not tail_verdict.should_continue
+                if tail_verdict.blocked:
+                    _retain_blocked_verdict(result, tail_verdict, turn=turn)
                     if is_flexible and result.continue_instruction:
                         await _continue_flexible_owner(result.continue_instruction, result.text)
-                if _tail_verdict.should_continue:
-                    _tail_next = (_tail_verdict.next_instruction or "").strip()
-                    if _tail_next:
+                if tail_verdict.should_continue:
+                    tail_next = (tail_verdict.next_instruction or "").strip()
+                    if tail_next:
                         result.continue_instruction = (
                             f"[Auto-continued remainder"
                             f" ({judged_rounds + 1}):"
-                            f" {_tail_verdict.missing} -- {_tail_next}]"
-                            if _tail_verdict.missing
+                            f" {tail_verdict.missing} -- {tail_next}]"
+                            if tail_verdict.missing
                             else f"[Auto-continued remainder"
-                            f" ({judged_rounds + 1}): {_tail_next}]"
+                            f" ({judged_rounds + 1}): {tail_next}]"
                         )
                         result.continuation_reason = "judge_limit"
                         if is_flexible:
@@ -4895,26 +4895,26 @@ def _format_session_response(
     auto-titles — teaching the model to emit it when nothing is blocked.
     """
     text_parts: list[str] = []
-    for ev in result.events:
-        if ev.kind != "text":
+    for event in result.events:
+        if event.kind != "text":
             continue
-        cleaned, _ = extract_await(ev.content)
+        cleaned, _ = extract_await(event.content)
         cleaned = cleaned.strip()
         if cleaned:
             text_parts.append(cleaned)
     attachment_parts: list[str] = []
     ws_real = os.path.realpath(workspace_path)
-    for ev in result.events:
-        if ev.kind != "attachment":
+    for event in result.events:
+        if event.kind != "attachment":
             continue
         try:
             path = os.path.realpath(
-                _workspace_candidate_path(ev.content, workspace_path),
+                _workspace_candidate_path(event.content, workspace_path),
             )
             if is_path_within(path, ws_real):
                 path = os.path.relpath(path, workspace_path)
         except (OSError, ValueError):
-            path = ev.content
+            path = event.content
         attachment_parts.append(f"[Attachment: {path}]")
     if text_parts or attachment_parts:
         return "\n\n".join([*text_parts, *attachment_parts])

@@ -95,10 +95,10 @@ def clip_status_value(value: object, max_chars: int = 200) -> str:
     max_chars = validated
     if len(text) <= max_chars:
         return text
-    _marker = "… [clipped]"
-    if max_chars <= len(_marker):
+    marker = "… [clipped]"
+    if max_chars <= len(marker):
         return text[:max(0, max_chars - 1)] + "…" if max_chars > 1 else "…"[:max_chars]
-    return text[:max_chars - len(_marker)] + _marker
+    return text[:max_chars - len(marker)] + marker
 
 
 # BMP sizes; bare BM bytes prove nil.
@@ -221,14 +221,14 @@ IMAGE_EXTENSIONS = frozenset({
 
 
 def drain_queue(
-    q: asyncio.Queue | None, collect: list | None = None,
+    msg_queue: asyncio.Queue | None, collect: list | None = None,
 ) -> None:
     """Empty a queue non-blocking. If collect is given, append items to it."""
-    if q is None:
+    if msg_queue is None:
         return
-    while not q.empty():
+    while not msg_queue.empty():
         try:
-            msg = q.get_nowait()
+            msg = msg_queue.get_nowait()
         except asyncio.QueueEmpty:
             break
         if collect is not None:
@@ -669,9 +669,9 @@ def load_json_object(
         with open(path, encoding="utf-8") as file_handle:
             data = json.load(file_handle)
         validate_json_nesting(data)
-    except (ValueError, OSError, RecursionError) as e:
+    except (ValueError, OSError, RecursionError) as exc:
         (log or logger).warning(
-            "Corrupt or unreadable %s (%s): %s", label, path, e,
+            "Corrupt or unreadable %s (%s): %s", label, path, exc,
         )
         return {}
     if isinstance(data, dict):

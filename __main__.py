@@ -74,12 +74,12 @@ if __name__ == "__main__":
 
 
 # Expose Cozter to spawned CLIs/bash.
-_pkg_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-_existing_pythonpath = os.environ.get("PYTHONPATH", "")
-if _pkg_parent not in _existing_pythonpath.split(os.pathsep):
+_PACKAGE_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_EXISTING_PYTHONPATH = os.environ.get("PYTHONPATH", "")
+if _PACKAGE_PARENT not in _EXISTING_PYTHONPATH.split(os.pathsep):
     os.environ["PYTHONPATH"] = (
-        f"{_pkg_parent}{os.pathsep}{_existing_pythonpath}"
-        if _existing_pythonpath else _pkg_parent
+        f"{_PACKAGE_PARENT}{os.pathsep}{_EXISTING_PYTHONPATH}"
+        if _EXISTING_PYTHONPATH else _PACKAGE_PARENT
     )
 
 
@@ -204,9 +204,9 @@ def _ensure_venv_and_reexec() -> None:
 
         env[_windows_updater.WINDOWS_SUPERVISOR_ENV] = "1"
         while True:
-            rc = subprocess.call(args, env=env, cwd=_pkg_parent)
-            if rc != _windows_updater.WINDOWS_SUPERVISOR_RESTART_EXIT_CODE:
-                os._exit(rc)
+            returncode = subprocess.call(args, env=env, cwd=_PACKAGE_PARENT)
+            if returncode != _windows_updater.WINDOWS_SUPERVISOR_RESTART_EXIT_CODE:
+                os._exit(returncode)
             time.sleep(_WINDOWS_CHILD_RESTART_DELAY_SEC)
     os.execve(python, args, env)
 
@@ -339,11 +339,11 @@ def log_crash(exc: BaseException) -> str:
     crash_file = os.path.join(
         LOG_DIR, f"crash_{now.strftime('%Y%m%d_%H%M%S')}.log"
     )
-    tb = traceback.format_exception(type(exc), exc, exc.__traceback__)
+    traceback_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
     with open(crash_file, "w", encoding="utf-8") as file_handle:
         file_handle.write(f"Crash at {now.isoformat()}\n")
         file_handle.write(f"Exception: {type(exc).__name__}: {exc}\n\n")
-        file_handle.writelines(tb)
+        file_handle.writelines(traceback_lines)
     _prune_old_crash_files()
     return crash_file
 
@@ -656,9 +656,9 @@ def _cli_respawner_loop() -> int:
     bot_env = {**os.environ, _CLI_CHILD_ENV: "1"}
     cmd = [sys.executable, "-m", "Cozter", *sys.argv[1:]]
     while True:
-        rc = subprocess.call(cmd, env=bot_env)
-        if rc != updater.CLI_RESTART_EXIT_CODE:
-            return rc
+        returncode = subprocess.call(cmd, env=bot_env)
+        if returncode != updater.CLI_RESTART_EXIT_CODE:
+            return returncode
 
 
 async def main_cli() -> None:

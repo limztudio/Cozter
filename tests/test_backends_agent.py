@@ -207,15 +207,15 @@ class BackendSharedHelperTests(unittest.TestCase):
         self.assertEqual(summarize_cli_tool("", None), "tool")
         self.assertEqual(summarize_cli_tool("Read", {"path": 3}), "Read")
         long_cmd = "x" * 300
-        _marker = "… [clipped]"
-        _keep = 200 - len(_marker)
+        marker = "… [clipped]"
+        keep = 200 - len(marker)
         self.assertEqual(
             summarize_cli_tool("Bash", {"command": long_cmd}),
-            "$ " + "x" * _keep + _marker,
+            "$ " + "x" * keep + marker,
         )
         self.assertEqual(
             summarize_cli_tool("Read", {"path": "p" * 300}),
-            "Read: " + "p" * _keep + _marker,
+            "Read: " + "p" * keep + marker,
         )
 
     def test_truncate_status_text_tiny_limit_keeps_visible_cut(self) -> None:

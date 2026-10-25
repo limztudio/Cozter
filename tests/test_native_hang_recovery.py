@@ -47,7 +47,7 @@ class NativeHangRecoveryTests(unittest.IsolatedAsyncioTestCase):
         await agent._wait_for_pending_session_writes(self.ws)
 
     async def test_all_native_backends_recover_in_same_job_without_history_replay(self):
-        for module, cls, _model in turns._CASES:
+        for module, cls, _model in turns.CASES:
             with self.subTest(backend=cls.name):
                 sid = self._conversation()
                 self.mode = "hold-after-activity"
@@ -231,7 +231,7 @@ class NativeHangRecoveryTests(unittest.IsolatedAsyncioTestCase):
             if role_by_record[key] != 1 or key in diagnosed_keys:
                 return await self._wait(task, ticket)
             diagnosed_keys.add(key)
-            healthy_key = next(k for k, role in role_by_record.items() if role == 2)
+            healthy_key = next(record_key for record_key, role in role_by_record.items() if role == 2)
             healthy_task = tasks_by_key[healthy_key]
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)

@@ -13,7 +13,7 @@ from Cozter.agent_tools.plugins import http_request
 from Cozter.agent_tools.plugins.git_info import GitInfoTool
 from Cozter.agent_tools.plugins.git_ops import GitOpsTool
 from Cozter.agent_tools.plugins.git_sync import GitSyncTool
-from Cozter.tests.test_agent_plugins import _FakeResponse, _FakeSession
+from Cozter.tests.test_agent_plugins import FakeResponse, FakeSession
 
 
 class PluginCliHelpTests(unittest.TestCase):
@@ -55,7 +55,7 @@ class PluginResultBudgetTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_http_request_preserves_the_requested_body_and_metadata(self):
         body = "request-body-" * 900
-        session = _FakeSession([_FakeResponse(
+        session = FakeSession([FakeResponse(
             status=200, url="https://api.example.com/data",
             headers={"Content-Type": "text/plain"}, body=body.encode(),
         )])

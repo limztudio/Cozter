@@ -40,13 +40,13 @@ class _StartupStderr(asyncio.StreamReader):
         self._prefix = prefix
         self._source = source
 
-    async def read(self, n: int = -1) -> bytes:
+    async def read(self, size: int = -1) -> bytes:
         if not self._prefix:
-            return await self._source.read(n)
-        if n < 0:
+            return await self._source.read(size)
+        if size < 0:
             prefix, self._prefix = self._prefix, b""
-            return prefix + await self._source.read(n)
-        chunk, self._prefix = self._prefix[:n], self._prefix[n:]
+            return prefix + await self._source.read(size)
+        chunk, self._prefix = self._prefix[:size], self._prefix[size:]
         return chunk
 
 

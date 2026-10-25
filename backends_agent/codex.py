@@ -363,8 +363,8 @@ class CodexBackend(Backend):
 
         # Vision: repeatable -i/--image flags ride as real pixels.
         if self.supports_vision and not compaction:
-            for _image_path in attachment_image_paths(prompt, workspace_path):
-                cmd += ["--image", _image_path]
+            for image_path in attachment_image_paths(prompt, workspace_path):
+                cmd += ["--image", image_path]
 
         return await create_prompt_subprocess(cmd, prompt)
 

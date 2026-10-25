@@ -22,7 +22,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 
-def _load_main_module():
+def load_main_module():
     """Import ``Cozter.__main__`` with the import-time pip install disabled."""
     # Checkout must win over the live install on sys.path.
     workspace_pkg_parent = os.path.dirname(
@@ -64,7 +64,7 @@ class _StubBot:
 
 class VenvBootstrapTests(unittest.TestCase):
     def test_system_python_reexecs_despite_inherited_venv_marker(self) -> None:
-        main = _load_main_module()
+        main = load_main_module()
         python = main._venv_python()
         with (
             mock.patch.object(main, "_running_in_venv", return_value=False),
@@ -86,7 +86,7 @@ class VenvBootstrapTests(unittest.TestCase):
         install.assert_not_called()
 
     def test_broken_venv_interpreter_fails_before_reexec_or_system_install(self) -> None:
-        main = _load_main_module()
+        main = load_main_module()
         python = main._venv_python()
         with (
             mock.patch.object(main, "_running_in_venv", return_value=False),
@@ -102,7 +102,7 @@ class VenvBootstrapTests(unittest.TestCase):
         install.assert_not_called()
 
     def test_dependency_bootstrap_skips_pip_when_runtime_is_complete(self) -> None:
-        main = _load_main_module()
+        main = load_main_module()
         with (
             mock.patch.object(main, "_runtime_dependency_issues", return_value=[]),
             mock.patch.object(main.subprocess, "check_call") as install,
@@ -112,7 +112,7 @@ class VenvBootstrapTests(unittest.TestCase):
         install.assert_not_called()
 
     def test_dependency_bootstrap_installs_when_runtime_is_incompatible(self) -> None:
-        main = _load_main_module()
+        main = load_main_module()
         with (
             mock.patch.object(
                 main,
@@ -129,7 +129,7 @@ class VenvBootstrapTests(unittest.TestCase):
         self.assertNotIn("timeout", kwargs)
 
     def test_dependency_check_detects_an_outdated_declared_version(self) -> None:
-        main = _load_main_module()
+        main = load_main_module()
         with tempfile.TemporaryDirectory() as tmp:
             req_path = os.path.join(tmp, "requirements.txt")
             with open(req_path, "w", encoding="utf-8") as req_file:
@@ -147,7 +147,7 @@ class VenvBootstrapTests(unittest.TestCase):
         )
 
     def test_dependency_bootstrap_reports_install_failure(self) -> None:
-        main = _load_main_module()
+        main = load_main_module()
         with (
             mock.patch.object(
                 main, "_runtime_dependency_issues", return_value=["missing aiohttp"],
@@ -161,7 +161,7 @@ class VenvBootstrapTests(unittest.TestCase):
             main._install_deps()
 
     def test_unsupported_python_is_rejected_before_bootstrap(self) -> None:
-        main = _load_main_module()
+        main = load_main_module()
         stderr = io.StringIO()
         with (
             contextlib.redirect_stderr(stderr),
@@ -173,7 +173,7 @@ class VenvBootstrapTests(unittest.TestCase):
         self.assertIn("requires Python 3.11", stderr.getvalue())
 
     def test_windows_bootstrap_supervises_venv_restarts(self) -> None:
-        main = _load_main_module()
+        main = load_main_module()
         with (
             mock.patch.object(main, "_running_in_venv", return_value=False),
             mock.patch.dict(
@@ -199,7 +199,7 @@ class VenvBootstrapTests(unittest.TestCase):
         self.assertEqual(call_mock.call_count, 2)
         args, kwargs = call_mock.call_args
         self.assertEqual(args[0], [python, "-m", "Cozter", *main.sys.argv[1:]])
-        self.assertEqual(kwargs["cwd"], main._pkg_parent)
+        self.assertEqual(kwargs["cwd"], main._PACKAGE_PARENT)
         self.assertEqual(kwargs["env"][main._VENV_REEXEC_ENV], "1")
         self.assertEqual(
             kwargs["env"][main.updater.WINDOWS_SUPERVISOR_ENV], "1",
@@ -213,7 +213,7 @@ class VenvBootstrapTests(unittest.TestCase):
 
 class LaunchArgumentTests(unittest.TestCase):
     def setUp(self) -> None:
-        self._main = _load_main_module()
+        self._main = load_main_module()
 
     def test_help_exits_without_starting_the_runtime(self) -> None:
         stdout = io.StringIO()
@@ -243,7 +243,7 @@ class LaunchArgumentTests(unittest.TestCase):
 class DumpRuntimeDiagnosticsTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.mkdtemp()
-        self._main = _load_main_module()
+        self._main = load_main_module()
         # Point LOG_DIR at temp for a fresh diagnostics.log.
         self._orig_log_dir = self._main.LOG_DIR
         self._orig_dump_file = self._main._dump_file
@@ -375,7 +375,7 @@ class DumpRuntimeDiagnosticsTests(unittest.TestCase):
 class UpdateLoopTests(unittest.IsolatedAsyncioTestCase):
     async def test_update_restart_waits_for_active_reply_delivery(self):
         """An update may be detected mid-reply, but never cuts it short."""
-        main = _load_main_module()
+        main = load_main_module()
         reply_delivered = asyncio.Event()
         wait_started = asyncio.Event()
         events: list[str] = []
@@ -454,7 +454,7 @@ class UpdateLoopTests(unittest.IsolatedAsyncioTestCase):
             main._UPDATE_IDLE_POLL_SEC = old_poll
 
     async def test_no_update_does_not_pause_message_intake(self):
-        main = _load_main_module()
+        main = load_main_module()
 
         class _Bot:
             restart_calls = 0
@@ -486,7 +486,7 @@ class UpdateLoopTests(unittest.IsolatedAsyncioTestCase):
 
 class UpdateHandoffTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.main = _load_main_module()
+        self.main = load_main_module()
         self.enterContext(mock.patch.object(self.main, "_UPDATE_IDLE_POLL_SEC", 0.001))
         self.pull = self.enterContext(mock.patch.object(self.main.updater, "fetch_and_pull", return_value=False))
         self.install = self.enterContext(mock.patch.object(self.main.updater, "install_requirements"))
@@ -808,7 +808,7 @@ class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):
             await main.main()
 
     async def test_failed_start_cleans_started_and_partially_started_platforms(self) -> None:
-        main = _load_main_module()
+        main = load_main_module()
         first, failed, concurrent = self._bot(), self._bot(), self._bot()
         failed.start.side_effect = RuntimeError("startup failed")
         with self.assertRaisesRegex(RuntimeError, "startup failed"):
@@ -819,7 +819,7 @@ class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):
         concurrent.stop.assert_awaited_once()
 
     async def test_shutdown_failures_do_not_skip_other_platform_cleanup(self) -> None:
-        main = _load_main_module()
+        main = load_main_module()
         first, second = self._bot(), self._bot()
         first.notify_users.side_effect = RuntimeError("send failed")
         second.stop.side_effect = RuntimeError("stop failed")
@@ -829,7 +829,7 @@ class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):
         second.stop.assert_awaited_once()
 
     async def test_cancel_replayed_after_stop_waiter_join_still_stops_platforms(self):
-        main = _load_main_module()
+        main = load_main_module()
         first, second = self._bot(), self._bot()
         original = main._cancel_platform_starts
 
@@ -847,7 +847,7 @@ class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):
         second.stop.assert_awaited_once()
 
     async def test_one_platform_replaying_cancel_does_not_skip_other_stops(self):
-        main = _load_main_module()
+        main = load_main_module()
         first, second = self._bot(), self._bot()
         second.stop.side_effect = asyncio.CancelledError("fixture cleanup cancellation")
         with self.assertRaises(asyncio.CancelledError):
@@ -856,7 +856,7 @@ class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):
         second.stop.assert_awaited_once()
 
     async def test_repeated_parent_cancel_keeps_all_platform_shutdowns_owned(self):
-        main = _load_main_module()
+        main = load_main_module()
         first, second = self._bot(), self._bot()
         entered = [asyncio.Event(), asyncio.Event()]
         release = asyncio.Event()
@@ -892,7 +892,7 @@ class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(asyncio.all_tasks() - previous_tasks, set())
 
     async def test_shutdown_during_start_joins_attempts_and_cleans_every_platform(self):
-        main = _load_main_module()
+        main = load_main_module()
         stop_event = asyncio.Event()
         entered = asyncio.Event()
         first, concurrent = self._bot(), self._bot()
@@ -916,7 +916,7 @@ class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_offline_platform_does_not_block_healthy_startup_or_updates(self):
         from Cozter.backends_bot.base import PlatformNotReadyError
 
-        main = _load_main_module()
+        main = load_main_module()
         stop_event = asyncio.Event()
         healthy_announced = asyncio.Event()
         offline, healthy = self._bot(), self._bot()
@@ -938,7 +938,7 @@ class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_shutdown_joins_simultaneous_start_and_backoff(self):
         from Cozter.backends_bot.base import PlatformNotReadyError
 
-        main = _load_main_module()
+        main = load_main_module()
         stop_event = asyncio.Event()
         starting, offline = self._bot(), self._bot()
         entered, backoff, cleaned = asyncio.Event(), asyncio.Event(), asyncio.Event()
@@ -967,7 +967,7 @@ class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):
         offline.stop.assert_awaited_once()
 
     async def test_confirmed_update_joins_startup_before_stopping_platform(self):
-        main = _load_main_module()
+        main = load_main_module()
         entered, cleaned = asyncio.Event(), asyncio.Event()
 
         async def start():
@@ -999,7 +999,7 @@ class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):
         restart.assert_called_once_with(0)
 
     async def test_aborted_update_keeps_dependency_startup_retry_owned(self):
-        main = _load_main_module()
+        main = load_main_module()
         bot = self._bot()
         bot.begin_update_restart = mock.AsyncMock()
         bot.cancel_update_restart = mock.AsyncMock()
@@ -1018,7 +1018,7 @@ class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def test_cli_failed_start_still_stops_partial_platform(self) -> None:
         from Cozter.backends_bot import cli
 
-        main = _load_main_module()
+        main = load_main_module()
         bot = self._bot()
         bot.start.side_effect = RuntimeError("CLI startup failed")
         with (
@@ -1256,7 +1256,7 @@ class SharedDaemonLifecycleTests(unittest.IsolatedAsyncioTestCase):
 
 class PlatformStartupReadinessTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self.main = _load_main_module()
+        self.main = load_main_module()
 
     def _bot(self, start):
         return SimpleNamespace(

@@ -12,7 +12,7 @@ from Cozter.backends_bot.base import _InjectQueue
 from Cozter.tests.helpers import OfflineBot
 
 
-class _ImmediateBackend:
+class ImmediateBackend:
     name = "post-turn-test"
     supports_typed_plugins = True
     default_summary_model = "summary-default"
@@ -128,7 +128,7 @@ class AgentPostTurnMaintenanceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_omitted_summary_model_uses_backend_default(self) -> None:
         maintenance_tasks: list[asyncio.Task] = []
-        backend = _ImmediateBackend()
+        backend = ImmediateBackend()
 
         async def fast_backend(*_args, **_kwargs):
             return AgentResult(text="reply"), False
@@ -178,7 +178,7 @@ class AgentPostTurnMaintenanceTests(unittest.IsolatedAsyncioTestCase):
         started = asyncio.Event()
         release = asyncio.Event()
         maintenance_tasks: list[asyncio.Task] = []
-        backend = _ImmediateBackend()
+        backend = ImmediateBackend()
 
         async def slow_compaction(*_args, **_kwargs) -> None:
             started.set()
@@ -247,7 +247,7 @@ class AgentContinuationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([event.kind for event in result.events], ["attachment"])
 
     async def run_turn(self, ws, drive, judge, *, inject_queue=None):
-        backend = _ImmediateBackend()
+        backend = ImmediateBackend()
         data = await asyncio.to_thread(session.create_session, ws, name="Manual")
         tasks = []
         original = agent.create_background_task

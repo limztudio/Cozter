@@ -8,7 +8,7 @@ import unittest
 from unittest import mock
 
 from Cozter.agent_tools.plugins import http_request
-from Cozter.tests.test_agent_plugins import _FakeResponse, _FakeSession
+from Cozter.tests.test_agent_plugins import FakeResponse, FakeSession
 
 
 class HttpRedirectMethodTests(unittest.TestCase):
@@ -19,12 +19,12 @@ class HttpRedirectMethodTests(unittest.TestCase):
             (308, "PUT", "PUT"),
         ):
             with self.subTest(status=status, method=method):
-                session = _FakeSession([
-                    _FakeResponse(
+                session = FakeSession([
+                    FakeResponse(
                         status=status, url="https://api.example.com/start",
                         headers={"Location": "https://api.example.com/final"},
                     ),
-                    _FakeResponse(
+                    FakeResponse(
                         status=200, url="https://api.example.com/final",
                         headers={"Content-Type": "text/plain"}, body=b"final response",
                     ),
@@ -44,10 +44,10 @@ class HttpRedirectMethodTests(unittest.TestCase):
                 self.assertIn("final response", result)
 
     def test_binary_redirect_result_also_reports_the_final_method(self) -> None:
-        session = _FakeSession([
-            _FakeResponse(status=303, url="https://api.example.com/start",
+        session = FakeSession([
+            FakeResponse(status=303, url="https://api.example.com/start",
                           headers={"Location": "/image"}),
-            _FakeResponse(status=200, url="https://api.example.com/image",
+            FakeResponse(status=200, url="https://api.example.com/image",
                           headers={"Content-Type": "image/png"}, body=b"binary"),
         ])
 

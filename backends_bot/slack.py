@@ -55,9 +55,9 @@ _BOLD_OPEN = ""
 _BOLD_CLOSE = ""
 
 
-def _bold_sub(m: re.Match) -> str:
+def _bold_sub(match: re.Match) -> str:
     """Wrap group(1) in bold placeholders (module-level for perf)."""
-    return _BOLD_OPEN + m.group(1) + _BOLD_CLOSE
+    return _BOLD_OPEN + match.group(1) + _BOLD_CLOSE
 
 
 def _md_to_mrkdwn(text: str) -> str:
@@ -558,9 +558,9 @@ class SlackBot(BotPlatform):
                     f"{upload_limit_message(self.max_upload_bytes)}",
                 )
                 continue
-            except Exception as e:
+            except Exception as exc:
                 await ctx_for_reply.reply_text(
-                    f"Failed to download {filename}: {e}"
+                    f"Failed to download {filename}: {exc}"
                 )
                 continue
 

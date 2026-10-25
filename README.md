@@ -2102,6 +2102,9 @@ Cozter/
 ├── __main__.py           entry point; sets PYTHONPATH; runs the bot
 ├── launch_job.py         Windows launcher job owns descendant lifetimes
 ├── process_launch.py     shared subprocess launch and cancellation ownership
+├── process_observation.py
+│                         cross-platform process tree, I/O, and descendant inspection
+├── supervision.py        progress-aware hang observation, diagnosis, and recovery
 ├── requirements.txt      Python runtime dependencies installed into .venv
 ├── py.typed              marks the package as typed for downstream checkers
 ├── pyproject.toml        Ruff E4/E7/E9/F lint contract
@@ -2138,7 +2141,9 @@ Cozter/
 │   ├── copilot.py          wraps `copilot`; persistent native homes, ProcessResourceMap for stateless homes
 │   ├── grok.py             wraps `grok --prompt-file`; CachedModelCatalog and
 │   │                       ProcessResourceMap for prompt files
+│   ├── antigravity_cli.py  wraps `agy --output-format stream-json`
 │   ├── flexible.py         flexible meta-agent backend (no CLI of its own)
+│   ├── _http_context.py    token-budgeted HTTP transcript projection and archive previews
 │   ├── _http_process.py       process-like adapter and error handling for HTTP backends
 │   ├── _openai_agent.py    shared in-process OpenAI-compatible agent loop;
 │   │                       one HTTP session per turn; shared catalog cache,
@@ -2351,19 +2356,20 @@ The tracked workspace is intentionally flat and small. A complete source
 audit should use `git ls-files` so hidden tracked files, especially
 `.config/config.example.json`, are included even though `.config/*` is
 ignored for local secrets and runtime queues.
-The runtime contains 77 Python source files, separate from the tests below.
+The runtime contains 81 Python source files, separate from the tests below.
 
 - Package entry and runtime setup: `__init__.py`, `__main__.py`,
-  `launch_job.py`, `process_launch.py`, `config.py`, `updater.py`, and `utils.py`
+  `launch_job.py`, `process_launch.py`, `process_observation.py`,
+  `supervision.py`, `config.py`, `updater.py`, and `utils.py`
 - Conversation, memory, and workspace state: `agent.py`, `workspace.py`,
   `session.py`, `router.py`, `titling.py`, `compaction.py`,
   `colony.py`, `flexible.py`, `execution_state.py`, `native_prompt.py`, `skills.py`, `schedules.py`, and `queue_store.py`
 - Chat-platform adapters: `backends_bot/__init__.py`, `base.py`, `formatting.py`,
   `cli.py`, `telegram.py`, `slack.py`, and `signal.py`
-- Agent adapters: `backends_agent/__init__.py`, `base.py`, `_http_process.py`,
-  `_openai_agent.py`, `codex.py`, `claude_code.py`,
-  `claude_background_guard.py`, `copilot.py`, `grok.py`, `flexible.py`,
-  `llama.py`, `zai.py`, and `meta.py`
+- Agent adapters: `backends_agent/__init__.py`, `base.py`, `_http_context.py`,
+  `_http_process.py`, `_openai_agent.py`, `codex.py`, `claude_code.py`,
+  `claude_background_guard.py`, `copilot.py`, `grok.py`,
+  `antigravity_cli.py`, `flexible.py`, `llama.py`, `zai.py`, and `meta.py`
 - Agent tool surface: `agent_tools/__init__.py`, `agent_tools/base.py`,
   `agent_tools/owned_worker.py`, `agent_tools/_http_types.py`,
   `agent_tools/_public_resolver.py`,
@@ -2381,67 +2387,72 @@ The runtime contains 77 Python source files, separate from the tests below.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (164 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 161 `test_*.py` modules:
+- Tests (197 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 194 `test_*.py` modules:
   `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`,
   `test_agent_post_turn.py`, `test_agent_process_cleanup.py`, `test_agent_prompt.py`,
-  `test_agent_tools.py`, `test_apply_patch_header_contract.py`, `test_apply_patch_limits.py`,
-  `test_attachment_delivery_latency.py`, `test_attachment_preparation_ownership.py`,
-  `test_backend_audit_regressions.py`, `test_backend_event_parsing.py`, `test_backend_repair.py`,
+  `test_agent_tools.py`, `test_antigravity_capabilities.py`, `test_antigravity_cli_backend.py`,
+  `test_antigravity_cli_integration.py`, `test_antigravity_native_progress.py`, `test_antigravity_skill_sharing.py`,
+  `test_apply_patch_header_contract.py`, `test_apply_patch_limits.py`, `test_attachment_delivery_latency.py`,
+  `test_attachment_preparation_ownership.py`, `test_backend_event_parsing.py`, `test_backend_launch_and_attachments.py`,
   `test_backends_agent.py`, `test_bash_process_output.py`, `test_bash_progress.py`,
   `test_blocked_judge_runtime.py`, `test_bot_commands.py`, `test_bot_recovery_and_lifecycle.py`,
   `test_calculator_responsiveness.py`, `test_canonical_platform_state.py`, `test_checkpoint_scope.py`,
-  `test_claude_background_detection.py`, `test_claude_background_guard.py`,
-  `test_claude_model_capabilities.py`, `test_cli_commands.py`, `test_cli_native_continuation.py`,
-  `test_cloud_model_capabilities.py`, `test_colony_streaming.py`, `test_compaction.py`,
-  `test_config.py`, `test_copilot_catalog_cleanup.py`, `test_detached_tasks.py`,
+  `test_claude_background_detection.py`, `test_claude_background_guard.py`, `test_claude_model_capabilities.py`,
+  `test_cli_commands.py`, `test_cli_native_continuation.py`, `test_cloud_model_capabilities.py`,
+  `test_colony_streaming.py`, `test_compaction.py`, `test_config.py`,
+  `test_copilot_catalog_cleanup.py`, `test_copilot_llama_catalog_refresh.py`, `test_detached_tasks.py`,
   `test_discovery_canonical_root.py`, `test_discovery_optimization.py`, `test_discovery_paging.py`,
   `test_discovery_pruning.py`, `test_discovery_tools_async.py`, `test_durable_poll_parallelism.py`,
-  `test_edit_file_read_limits.py`, `test_effort_maximum.py`, `test_execution_state.py`, `test_flexible.py`,
-  `test_flexible_continuation.py`, `test_flexible_effort.py`, `test_flexible_injection_continuation.py`,
-  `test_flexible_instruction_identity.py`, `test_flexible_native_history.py`,
-  `test_flexible_native_injection_continuation.py`, `test_flexible_native_sessions.py`,
-  `test_flexible_parallel_plan.py`, `test_flexible_parallel_runtime.py`,
-  `test_flexible_prompt_sections.py`,
-  `test_format_marker_latency.py`, `test_git_checkout_integrity.py`, `test_git_cold_launch.py`,
-  `test_git_plugin_paging.py`, `test_git_process_output.py`, `test_grok_model_line_latency.py`,
-  `test_http_body_sniff.py`, `test_http_event_framing.py`, `test_http_execution_continuation.py`,
-  `test_http_latency.py`, `test_http_owned_mutation_cancellation.py`,
+  `test_edit_file_read_limits.py`, `test_effort_confirmation.py`, `test_effort_maximum.py`,
+  `test_execution_state.py`, `test_flexible.py`, `test_flexible_cached_worker_budget.py`,
+  `test_flexible_continuation.py`, `test_flexible_direct_high.py`, `test_flexible_effort.py`,
+  `test_flexible_helper_unavailability.py`, `test_flexible_injection_continuation.py`, `test_flexible_instruction_identity.py`,
+  `test_flexible_lease_native_continuity.py`, `test_flexible_low_default.py`, `test_flexible_monthly_limit.py`,
+  `test_flexible_native_history.py`, `test_flexible_native_injection_continuation.py`, `test_flexible_native_sessions.py`,
+  `test_flexible_owner_error_reopen.py`, `test_flexible_owner_http.py`, `test_flexible_owner_native.py`,
+  `test_flexible_owner_plan.py`, `test_flexible_owner_runtime.py`, `test_flexible_parallel_plan.py`,
+  `test_flexible_parallel_runtime.py`, `test_flexible_prompt_rendering.py`, `test_flexible_prompt_sections.py`,
+  `test_flexible_routing_escalation.py`, `test_flexible_tier_leases.py`, `test_format_marker_latency.py`,
+  `test_git_checkout_integrity.py`, `test_git_cold_launch.py`, `test_git_plugin_paging.py`,
+  `test_git_process_output.py`, `test_grok_model_line_latency.py`, `test_hang_diagnosis_backend.py`,
+  `test_hang_supervision.py`, `test_http_body_sniff.py`, `test_http_context_recovery.py`,
+  `test_http_event_framing.py`, `test_http_execution_continuation.py`, `test_http_generation_supervision.py`,
+  `test_http_latency.py`, `test_http_lease_bootstrap.py`, `test_http_owned_mutation_cancellation.py`,
   `test_http_pending_checkpoints.py`, `test_http_redirect_method.py`, `test_http_restore_accounting.py`,
-  `test_http_skill_workflow.py`, `test_image_dimensions.py`,
-  `test_image_snapshot_metadata.py`, `test_inject.py`, `test_interactive_schedule_refresh.py`,
-  `test_internal_backend_deadline.py`, `test_interrupted_turns.py`, `test_job_continuation.py`,
-  `test_job_prerequisite_retry.py`, `test_judge_blocked.py`,
-  `test_launch_job.py`, `test_launcher_and_followups.py`, `test_lazy_tool_http_imports.py`,
-  `test_maintenance_context.py`, `test_memory_corrupt_state.py`, `test_memory_preservation.py`,
-  `test_memory_repair_regressions.py`, `test_memory_streamed_search.py`,
-  `test_monthly_schedule_execution.py`, `test_monthly_schedules.py`,
+  `test_http_skill_workflow.py`, `test_http_tool_argument_recovery.py`, `test_ignore_aware_discovery.py`,
+  `test_image_dimensions.py`, `test_image_snapshot_metadata.py`, `test_inject.py`,
+  `test_interactive_schedule_refresh.py`, `test_internal_backend_deadline.py`, `test_interrupted_turns.py`,
+  `test_job_continuation.py`, `test_job_prerequisite_retry.py`, `test_judge_blocked.py`,
+  `test_launch_cleanup_and_signal_journal.py`, `test_launch_job.py`, `test_launcher_and_followups.py`,
+  `test_lazy_tool_http_imports.py`, `test_maintenance_context.py`, `test_memory_corrupt_state.py`,
+  `test_memory_maintenance_persistence.py`, `test_memory_preservation.py`, `test_memory_streamed_search.py`,
+  `test_model_catalog_refresh.py`, `test_monthly_schedule_execution.py`, `test_monthly_schedules.py`,
   `test_native_conversation_state.py`, `test_native_current_protocol.py`, `test_native_delta_sync.py`,
-  `test_native_launch_contract.py`, `test_native_prompt.py`, `test_native_session_turns.py`,
-  `test_native_skill_launch.py`,
-  `test_notes_owned_worker.py`,
-  `test_notes_transactions.py`, `test_openai_agent.py`, `test_owned_file_mutations.py`,
-  `test_patch_limit_optimization.py`, `test_planner_context_latency.py`, `test_platform_formatting.py`,
-  `test_plugin_cli_unicode.py`, `test_plugin_memory_calculator_performance.py`,
+  `test_native_hang_recovery.py`, `test_native_launch_contract.py`, `test_native_prompt.py`,
+  `test_native_session_turns.py`, `test_native_skill_launch.py`, `test_native_stream_progress.py`,
+  `test_notes_owned_worker.py`, `test_notes_transactions.py`, `test_openai_agent.py`,
+  `test_owned_file_mutations.py`, `test_patch_limit_optimization.py`, `test_planner_context_latency.py`,
+  `test_platform_formatting.py`, `test_plugin_cli_unicode.py`, `test_plugin_memory_calculator_performance.py`,
   `test_plugin_parallelism.py`, `test_plugin_result_budgets.py`, `test_prerequisite_checkpoint.py`,
-  `test_prompt_payload_dedup.py`, `test_prompt_subprocess.py`, `test_protocol_marker_latency.py`,
-  `test_public_http_pool.py`, `test_queue_persistence_latency.py`, `test_queue_store.py`, `test_read_file_character_cursor.py`,
-  `test_read_file_offset_chunks.py`, `test_read_files.py`, `test_reply_delivery.py`, `test_run_lock.py`,
+  `test_process_observation.py`, `test_prompt_payload_dedup.py`, `test_prompt_subprocess.py`,
+  `test_protocol_marker_latency.py`, `test_public_http_pool.py`, `test_queue_persistence_latency.py`,
+  `test_queue_store.py`, `test_read_file_character_cursor.py`, `test_read_file_offset_chunks.py`,
+  `test_read_files.py`, `test_reply_delivery.py`, `test_run_lock.py`,
   `test_runtime_diagnostics.py`, `test_schedule_execution.py`, `test_session_picker.py`,
-  `test_session_write_latency.py`, `test_signal_account_config.py`,
-  `test_signal_attachment_decoding.py`, `test_signal_feedback.py`,
-  `test_signal_formatting.py`, `test_signal_inline_latency.py`, `test_signal_literal_runs.py`,
-  `test_signal_send_observability.py`, `test_signal_span_projection.py`, `test_signal_status.py`,
-  `test_signal_status_recovery.py`, `test_signal_transport.py`, `test_slack_commands.py`,
-  `test_skill_prompt_integration.py`, `test_skill_tools.py`,
+  `test_session_write_latency.py`, `test_signal_account_config.py`, `test_signal_attachment_decoding.py`,
+  `test_signal_feedback.py`, `test_signal_formatting.py`, `test_signal_inline_latency.py`,
+  `test_signal_literal_runs.py`, `test_signal_send_observability.py`, `test_signal_span_projection.py`,
+  `test_signal_status.py`, `test_signal_status_recovery.py`, `test_signal_transport.py`,
+  `test_skill_prompt_integration.py`, `test_skill_tools.py`, `test_slack_commands.py`,
   `test_slack_formatting.py`, `test_state_fallbacks.py`, `test_state_integrity.py`,
   `test_status_and_shell_latency.py`, `test_status_latency.py`, `test_thinking_display.py`,
-  `test_titling.py`, `test_tool_permissions.py`, `test_tool_runtime.py`,
-  `test_tool_safety_and_output_limits.py`, `test_tool_state_integrity.py`,
-  `test_tools_audit_regressions.py`, `test_tree_junction_permissions.py`, `test_turn_budget.py`,
-  `test_unbounded_tool_http_execution.py`, `test_update_background_admission.py`,
-  `test_updater.py`, `test_upload_limits.py`, `test_utils.py`,
-  `test_vision_marker_scanning.py`, `test_web_fetch.py`, `test_web_html_latency.py`,
-  `test_web_search.py`, `test_workspace_skills.py`, `test_yearly_schedules.py`)
+  `test_titling.py`, `test_tool_call_and_bash_launch.py`, `test_tool_hang_recovery.py`,
+  `test_tool_permissions.py`, `test_tool_runtime.py`, `test_tool_safety_and_output_limits.py`,
+  `test_tool_state_integrity.py`, `test_tree_junction_permissions.py`, `test_turn_budget.py`,
+  `test_unbounded_tool_http_execution.py`, `test_update_background_admission.py`, `test_updater.py`,
+  `test_upload_limits.py`, `test_utils.py`, `test_vision_marker_scanning.py`,
+  `test_web_fetch.py`, `test_web_html_latency.py`, `test_web_search.py`,
+  `test_workspace_skills.py`, `test_yearly_schedules.py`)
   covering config validation, agent attachments, prompts,
   process cleanup, interrupted-turn persistence, and post-turn behavior;
   backend model defaults (Claude and cloud provider capabilities), shared

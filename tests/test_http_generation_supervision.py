@@ -12,8 +12,8 @@ from unittest import mock
 from Cozter import agent, config, execution_state, supervision
 from Cozter.backends_agent import _openai_agent as oa
 from Cozter.tests.helpers import OfflineHttpBackend
-from Cozter.tests.test_http_execution_continuation import _call
-from Cozter.tests.test_openai_agent import _SSESession, _SSEResponse
+from Cozter.tests.test_http_execution_continuation import make_tool_call
+from Cozter.tests.test_openai_agent import SseSession, SseResponse
 
 
 def _confirmed():
@@ -47,14 +47,14 @@ class HttpGenerationSupervisionTests(unittest.IsolatedAsyncioTestCase):
                     await asyncio.sleep(.01)
                     yield chunk
 
-        response = _SSEResponse([])
+        response = SseResponse([])
         response.content = DelayedContent()
         events = []
         note = supervision.note_output
         with (
             tempfile.TemporaryDirectory() as workspace,
             supervision.worker_scope(workspace, summary_backend_name="offline", summary_model="model"),
-            mock.patch.object(oa.aiohttp, "ClientSession", return_value=_SSESession(response)),
+            mock.patch.object(oa.aiohttp, "ClientSession", return_value=SseSession(response)),
             mock.patch.object(supervision, "_diagnose", new=mock.AsyncMock()) as doctor,
             mock.patch.object(supervision, "note_output", wraps=note) as output,
         ):
@@ -75,7 +75,7 @@ class HttpGenerationSupervisionTests(unittest.IsolatedAsyncioTestCase):
         async def stream(_endpoint, payload, *_args, **_kwargs):
             requests.append(copy.deepcopy(payload))
             if len(requests) == 1:
-                return "", "", [_call("write-once", "write_file")]
+                return "", "", [make_tool_call("write-once", "write_file")]
             if len(requests) == 2:
                 try:
                     await asyncio.Event().wait()
@@ -197,7 +197,7 @@ class HttpGenerationSupervisionTests(unittest.IsolatedAsyncioTestCase):
                 "name": "read_file", "arguments": "{}",
             }}]}}]},
         ]
-        response = _SSEResponse([
+        response = SseResponse([
             ("data: " + json.dumps(event) + "\n\n").encode() for event in events
         ] + [b"data: [DONE]\n\n"])
         with (
@@ -205,7 +205,7 @@ class HttpGenerationSupervisionTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(supervision, "note_output") as output,
         ):
             _, reasoning, calls = await oa._stream_once(
-                "http://offline.invalid", {}, {}, "offline", session=_SSESession(response),
+                "http://offline.invalid", {}, {}, "offline", session=SseSession(response),
             )
         self.assertEqual(reasoning, private)
         self.assertEqual(len(calls), 1)

@@ -9,13 +9,13 @@ from Cozter.tests.helpers import persist_queue_entry
 
 from Cozter import agent, session, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
-from Cozter.tests.test_reply_delivery import _ReplyDeliveryBot
+from Cozter.tests.test_reply_delivery import ReplyDeliveryBot
 
 
 class CheckpointScopeTests(unittest.IsolatedAsyncioTestCase):
     async def test_repeated_real_allowance_boundaries_keep_canonical_request_and_evidence(self):
         with tempfile.TemporaryDirectory() as ws, mock.patch.object(workspace, "CONFIG_DIR", ws):
-            bot = _ReplyDeliveryBot(ws, fail_final=False)
+            bot = ReplyDeliveryBot(ws, fail_final=False)
             sid = session.create_session(ws, name="Remaining duplicate cleanup")["id"]
             original = "Remove all duplication, preserve the documented behavior, verify and commit the result."
             addition = "Also retain the public command names."

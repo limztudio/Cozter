@@ -10,7 +10,7 @@ from unittest import mock
 
 from Cozter.backends_agent import _openai_agent as oa
 from Cozter.tests.helpers import OfflineHttpBackend, OfflineRecord
-from Cozter.tests.test_http_execution_continuation import _call
+from Cozter.tests.test_http_execution_continuation import make_tool_call
 
 
 def _legacy_restore(saved, pending):
@@ -67,7 +67,7 @@ class HttpRestoreAccountingTests(unittest.TestCase):
                               "reasoning_content": "opaque\udfff\nprovider-state"})
                 saved.append({"role": "tool", "tool_call_id": f"earlier-{index}",
                               "name": "read_file", "content": generator.choice(contents)})
-            calls = [_call(f"call-{index}") for index in range(generator.randrange(6))]
+            calls = [make_tool_call(f"call-{index}") for index in range(generator.randrange(6))]
             saved.append({"role": "assistant", "content": None, "tool_calls": calls})
             pending = {str(index): generator.choice(contents + [False, 4, {}])
                        for index in range(len(calls)) if generator.choice([True, False])}
@@ -116,7 +116,7 @@ class HttpRestoreIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 record = await self.seed_record()
                 saved = [{"role": "user", "content": "original evidence"},
                          {"role": "assistant", "content": None,
-                          "tool_calls": [_call("known"), _call("unknown")],
+                          "tool_calls": [make_tool_call("known"), make_tool_call("unknown")],
                           "reasoning_content": "opaque provider state"}]
                 record.values["http_messages"] = copy.deepcopy(saved)
                 record.values["http_pending_results"] = {"0": "saved evidence"}
@@ -153,7 +153,7 @@ class HttpRestoreIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_recovery_outcomes_still_trigger_full_conversation_limit_before_requests(self):
         record = await self.seed_record()
-        saved = [{"role": "assistant", "content": None, "tool_calls": [_call("unknown")]}]
+        saved = [{"role": "assistant", "content": None, "tool_calls": [make_tool_call("unknown")]}]
         record.values["http_messages"] = saved
         record.values["http_pending_results"] = {}
         system = {"role": "system", "content": "fresh policy"}

@@ -216,15 +216,15 @@ def format_msg_line(msg: dict, cap: int | None = MSG_CONTENT_MAX) -> str:
         # Non-positive cap: return the role label alone.
         return f"{role}:"
     if cap is not None and len(content) > cap:
-        _suffix = (
+        suffix = (
             f"… [truncated {len(content)} chars total;"
             " never treat this preview as full content; say PARTIAL"
             " + remainder when coverage is unclear]"
         )
-        if cap <= len(_suffix):
+        if cap <= len(suffix):
             content = content[:max(0, cap - 1)] + "…" if cap > 1 else "…"[:cap]
         else:
-            content = content[:cap - len(_suffix)] + _suffix
+            content = content[:cap - len(suffix)] + suffix
     return f"{role}: {content}"
 
 

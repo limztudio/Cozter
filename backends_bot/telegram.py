@@ -319,8 +319,8 @@ class TelegramBot(BotPlatform):
         if ext in _TELEGRAM_PHOTO_EXTENSIONS:
             try:
                 await self._send_file_with_retry(
-                    lambda f: self.app.bot.send_photo(
-                        chat_id=chat_id, photo=f, filename=name,
+                    lambda file_handle: self.app.bot.send_photo(
+                        chat_id=chat_id, photo=file_handle, filename=name,
                     ),
                     path,
                 )
@@ -332,8 +332,8 @@ class TelegramBot(BotPlatform):
                     exc_info=True,
                 )
         await self._send_file_with_retry(
-            lambda f: self.app.bot.send_document(
-                chat_id=chat_id, document=f, filename=name,
+            lambda file_handle: self.app.bot.send_document(
+                chat_id=chat_id, document=file_handle, filename=name,
             ),
             path,
         )
@@ -414,12 +414,12 @@ class TelegramBot(BotPlatform):
             try:
                 await self.app.initialize()
                 break
-            except NetworkError as e:
+            except NetworkError as exc:
                 if attempt == 5:
                     raise
                 logger.warning(
                     "Network error during init (attempt %d/5): %s",
-                    attempt, e,
+                    attempt, exc,
                 )
                 await asyncio.sleep(5 * attempt)
         await self.app.start()
@@ -564,8 +564,8 @@ class TelegramBot(BotPlatform):
                 update, upload_limit_message(self.max_upload_bytes),
             )
             return
-        except Exception as e:
-            await self._reply_file_error(update, f"Failed to download file: {e}")
+        except Exception as exc:
+            await self._reply_file_error(update, f"Failed to download file: {exc}")
             return
 
         ctx = self._build_context(
@@ -610,9 +610,9 @@ class TelegramBot(BotPlatform):
                 msg += "\nNo workspace selected. Use /new or /open."
             try:
                 await self.send_text(uid, msg)
-            except Exception as e:
+            except Exception as exc:
                 logger.warning(
-                    "Failed to notify user %s: %s", uid, e,
+                    "Failed to notify user %s: %s", uid, exc,
                 )
 
     def _build_context(

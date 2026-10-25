@@ -11,7 +11,7 @@ from Cozter.tests.helpers import persist_queue_entry
 
 from Cozter import agent, execution_state, flexible, session, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
-from Cozter.tests.test_reply_delivery import _ReplyDeliveryBot
+from Cozter.tests.test_reply_delivery import ReplyDeliveryBot
 
 
 class FlexibleInjectionContinuationTests(unittest.IsolatedAsyncioTestCase):
@@ -50,7 +50,7 @@ class FlexibleInjectionContinuationTests(unittest.IsolatedAsyncioTestCase):
 
     async def check_real_bot(self, additions, *, truncated):
         original = "Repair all three parts and retain verification evidence."
-        bot = _ReplyDeliveryBot(self.ws, fail_final=False)
+        bot = ReplyDeliveryBot(self.ws, fail_final=False)
         bot.supports_transient_status = False
         entry = await persist_queue_entry(bot, "u1", original, "chat")
         bot._ensure_message_queue("u1").put_nowait((original, "chat", entry, False))

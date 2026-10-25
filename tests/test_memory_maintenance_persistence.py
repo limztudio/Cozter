@@ -47,14 +47,14 @@ class ColonyCapacityTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.to_thread(session.save_session, ws, data["id"], data)
             await asyncio.to_thread(colony.set_items, ws, ["Existing shared fact."])
             paths = [Path(colony._path(ws)), Path(ws, ".cozter", "sessions", data["id"] + ".json")]
-            before = [p.read_bytes() for p in paths]
-            proposed = ["Promoted fact must survive.", *[f"Shared {i}." for i in range(colony.COLONY_CAP)]]
+            before = [path.read_bytes() for path in paths]
+            proposed = ["Promoted fact must survive.", *[f"Shared {index}." for index in range(colony.COLONY_CAP)]]
             output = ("[COLONY]\n" + "\n".join("- " + item for item in proposed)
                       + f"\n[/COLONY]\n[SESSION:{data['id']}]\n[/SESSION]")
             with (mock.patch.object(colony, "run_internal_backend", new=mock.AsyncMock(return_value=output)),
                   self.assertLogs(colony.logger, level="WARNING")):
                 self.assertFalse(await colony.consolidate(ws, backend_name="codex"))
-            self.assertEqual([p.read_bytes() for p in paths], before)
+            self.assertEqual([path.read_bytes() for path in paths], before)
 
     async def test_repeated_colony_items_are_deduplicated_before_capacity_check(self):
         with tempfile.TemporaryDirectory() as ws:

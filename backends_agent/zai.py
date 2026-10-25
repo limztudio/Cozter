@@ -28,7 +28,7 @@ from ._openai_agent import (
 from .base import effort_band
 
 
-class _FallbackModelSpec(NamedTuple):
+class _ZaiModelSpec(NamedTuple):
     """Curated Z.ai fallback metadata for one chat-completion model."""
 
     name: str
@@ -40,36 +40,36 @@ class _FallbackModelSpec(NamedTuple):
 # Discovery fallback: curated chat IDs + capabilities.
 _FALLBACK_MODEL_SPECS = (
     # General endpoint flagship.
-    _FallbackModelSpec("glm-5.3", 1_000_000, True, True),
+    _ZaiModelSpec("glm-5.3", 1_000_000, True, True),
     # Flash/FlashX share the endpoint.
-    _FallbackModelSpec("glm-5.3-flash", 1_000_000, True, True),
-    _FallbackModelSpec("glm-5.3-flashx", 1_000_000, True, True),
-    _FallbackModelSpec("glm-5.2", 1_000_000, True, True),
+    _ZaiModelSpec("glm-5.3-flash", 1_000_000, True, True),
+    _ZaiModelSpec("glm-5.3-flashx", 1_000_000, True, True),
+    _ZaiModelSpec("glm-5.2", 1_000_000, True, True),
     # Vision: no text-only ``tool_stream`` extension.
-    _FallbackModelSpec("glm-5v-turbo", 200_000, True, False),
-    _FallbackModelSpec("glm-5.1", 200_000, True, True),
-    _FallbackModelSpec("glm-5-turbo", 200_000, True, True),
-    _FallbackModelSpec("glm-5", 200_000, True, True),
-    _FallbackModelSpec("glm-4.7", 200_000, True, True),
-    _FallbackModelSpec("glm-4.7-flash", 200_000, True, True),
-    _FallbackModelSpec("glm-4.7-flashx", 200_000, True, True),
-    _FallbackModelSpec("glm-4.6", 200_000, True, True),
+    _ZaiModelSpec("glm-5v-turbo", 200_000, True, False),
+    _ZaiModelSpec("glm-5.1", 200_000, True, True),
+    _ZaiModelSpec("glm-5-turbo", 200_000, True, True),
+    _ZaiModelSpec("glm-5", 200_000, True, True),
+    _ZaiModelSpec("glm-4.7", 200_000, True, True),
+    _ZaiModelSpec("glm-4.7-flash", 200_000, True, True),
+    _ZaiModelSpec("glm-4.7-flashx", 200_000, True, True),
+    _ZaiModelSpec("glm-4.6", 200_000, True, True),
     # Vision variants: native functions, no ``tool_stream`` extension.
-    _FallbackModelSpec("glm-4.6v", 128_000, True, False),
-    _FallbackModelSpec("glm-4.6v-flashx", 128_000, True, False),
-    _FallbackModelSpec("glm-4.6v-flash", 128_000, True, False),
-    _FallbackModelSpec("glm-4.5v", 64_000, True, False),
-    _FallbackModelSpec("glm-4.5", 128_000, True, False),
-    _FallbackModelSpec("glm-4.5-air", 128_000, True, False),
-    _FallbackModelSpec("glm-4.5-x", 128_000, True, False),
-    _FallbackModelSpec("glm-4.5-airx", 128_000, True, False),
-    _FallbackModelSpec("glm-4.5-flash", 200_000, True, False),
-    _FallbackModelSpec("glm-4-32b-0414-128k", 128_000, False, False),
+    _ZaiModelSpec("glm-4.6v", 128_000, True, False),
+    _ZaiModelSpec("glm-4.6v-flashx", 128_000, True, False),
+    _ZaiModelSpec("glm-4.6v-flash", 128_000, True, False),
+    _ZaiModelSpec("glm-4.5v", 64_000, True, False),
+    _ZaiModelSpec("glm-4.5", 128_000, True, False),
+    _ZaiModelSpec("glm-4.5-air", 128_000, True, False),
+    _ZaiModelSpec("glm-4.5-x", 128_000, True, False),
+    _ZaiModelSpec("glm-4.5-airx", 128_000, True, False),
+    _ZaiModelSpec("glm-4.5-flash", 200_000, True, False),
+    _ZaiModelSpec("glm-4-32b-0414-128k", 128_000, False, False),
 )
 # Coding-Plan-only IDs: keep the ``[1m]`` pin out of the fallback.
 _CODING_PLAN_FALLBACK_MODEL_SPECS = (
-    _FallbackModelSpec("glm-5.3[1m]", 1_000_000, True, True),
-    _FallbackModelSpec("glm-5.3-flash[1m]", 1_000_000, True, True),
+    _ZaiModelSpec("glm-5.3[1m]", 1_000_000, True, True),
+    _ZaiModelSpec("glm-5.3-flash[1m]", 1_000_000, True, True),
 )
 _FALLBACK_MODELS = tuple(spec.name for spec in _FALLBACK_MODEL_SPECS)
 _CODING_PLAN_FALLBACK_MODELS = tuple(

@@ -107,23 +107,23 @@ class AgentToolHelperTests(unittest.TestCase):
         )
 
     def test_status_summaries_bound_paths_and_values(self) -> None:
-        _marker = "… [clipped]"
-        _keep = 200 - len(_marker)
+        marker = "… [clipped]"
+        keep = 200 - len(marker)
         self.assertEqual(
             summarize_path("read_file", {"path": "p" * 300}),
-            "read_file: " + "p" * _keep + _marker,
+            "read_file: " + "p" * keep + marker,
         )
         self.assertEqual(
             summarize_path_pair(
                 "copy_file",
                 {"source": "s" * 300, "destination": "d" * 300},
             ),
-            "copy_file: " + "s" * _keep + _marker
-            + " -> " + "d" * _keep + _marker,
+            "copy_file: " + "s" * keep + marker
+            + " -> " + "d" * keep + marker,
         )
         self.assertEqual(clip_status_value("ok"), "ok")
         self.assertEqual(
-            clip_status_value("x" * 201), "x" * _keep + _marker,
+            clip_status_value("x" * 201), "x" * keep + marker,
         )
 
     def test_read_file_rejects_non_finite_range_values(self) -> None:

@@ -10,15 +10,15 @@ from unittest import mock
 from Cozter import execution_state
 from Cozter.backends_agent import _http_context as hc, _openai_agent as oa
 from Cozter.tests.helpers import OfflineHttpBackend
-from Cozter.tests.test_http_execution_continuation import _call
-from Cozter.tests.test_openai_agent import _EventCaptureProcess, _SSEResponse, _SSESession
+from Cozter.tests.test_http_execution_continuation import make_tool_call
+from Cozter.tests.test_openai_agent import EventCaptureProcess, SseResponse, SseSession
 
 
 def _history(waves=8, body_chars=12_000):
     messages = [{"role": "user", "content": "ORIGINAL obligations must remain exact"}]
     for index in range(waves):
         messages.extend([
-            {"role": "assistant", "content": f"wave {index}", "tool_calls": [_call(str(index))]},
+            {"role": "assistant", "content": f"wave {index}", "tool_calls": [make_tool_call(str(index))]},
             {"role": "tool", "tool_call_id": str(index), "name": "read_file",
              "content": f"begin {index}:" + "evidence" * (body_chars // 8) + f":end {index}"},
         ])
@@ -53,7 +53,7 @@ class ContextProjectionEdgeTests(unittest.TestCase):
         _assert_pairs(self, projected["messages"])
         for row in projected["messages"]:
             if row["role"] == "tool" and "Tool result preview" in row["content"]:
-                source_index = next(i for i, original in enumerate(history)
+                source_index = next(index for index, original in enumerate(history)
                                     if original.get("tool_call_id") == row["tool_call_id"])
                 self.assertIn(f"indexes {source_index};", row["content"])
 
@@ -82,7 +82,7 @@ class ContextProjectionEdgeTests(unittest.TestCase):
 
     def test_pending_or_orphan_tool_groups_are_rejected_without_mutation(self):
         for messages in (
-            [{"role": "assistant", "content": None, "tool_calls": [_call("missing")]}],
+            [{"role": "assistant", "content": None, "tool_calls": [make_tool_call("missing")]}],
             [{"role": "tool", "tool_call_id": "orphan", "content": "x" * 5000}],
         ):
             payload = {"messages": [{"role": "system", "content": "s"}, *messages]}
@@ -94,7 +94,7 @@ class ContextProjectionEdgeTests(unittest.TestCase):
 
 class ContextRecoveryEdgeTests(unittest.IsolatedAsyncioTestCase):
     async def _run(self, workspace, prompt="ORIGINAL obligations must remain exact"):
-        proc = _EventCaptureProcess()
+        proc = EventCaptureProcess()
         with (
             mock.patch.object(oa, "_system_prompt", return_value="current system and skills"),
             mock.patch.object(oa, "_tools_for_approval", return_value=[]),
@@ -114,7 +114,7 @@ class ContextRecoveryEdgeTests(unittest.IsolatedAsyncioTestCase):
                     await self._run(workspace)
                 saved = _history(waves=10, body_chars=8000)
                 saved.append({"role": "assistant", "content": None,
-                              "tool_calls": [_call("write", "write_file"), _call("unknown", "bash")]})
+                              "tool_calls": [make_tool_call("write", "write_file"), make_tool_call("unknown", "bash")]})
                 await record.save(http_messages=saved, http_pending_results={"0": "WROTE ONCE"})
                 requests = []
 
@@ -162,7 +162,7 @@ class ContextRecoveryEdgeTests(unittest.IsolatedAsyncioTestCase):
 
                 async def stream(_endpoint, payload, *_args, **_kwargs):
                     requests.append(copy.deepcopy(payload))
-                    return ("", "", [_call("write", "write_file")]) if len(requests) == 1 else ("done", "", [])
+                    return ("", "", [make_tool_call("write", "write_file")]) if len(requests) == 1 else ("done", "", [])
 
                 async def execute(*_args):
                     writes.append("once")
@@ -227,17 +227,17 @@ class ContextRecoveryEdgeTests(unittest.IsolatedAsyncioTestCase):
                    b'data: {"choices":[{"delta":{},"finish_reason":"model_context_window_exceeded"}]}\n\n']),
         ):
             expected_window = None if b"finish_reason" in chunks[-1] else 1_048_576
-            response = _SSEResponse(chunks)
+            response = SseResponse(chunks)
             response.status = status
             with self.subTest(status=status), self.assertRaises(hc.ContextLengthError) as caught:
-                await oa._post_completion_stream(_SSESession(response), "http://offline", {}, {},
+                await oa._post_completion_stream(SseSession(response), "http://offline", {}, {},
                                                  oa.aiohttp.ClientTimeout(), "meta")
             self.assertEqual(caught.exception.window, expected_window)
-        response = _SSEResponse([json.dumps({"error": {"code": "invalid_request_error",
+        response = SseResponse([json.dumps({"error": {"code": "invalid_request_error",
                                                         "message": "arguments must be valid JSON"}}).encode()])
         response.status = 400
         with self.assertRaises(RuntimeError) as caught:
-            await oa._post_completion_stream(_SSESession(response), "http://offline", {}, {},
+            await oa._post_completion_stream(SseSession(response), "http://offline", {}, {},
                                              oa.aiohttp.ClientTimeout(), "meta")
         self.assertNotIsInstance(caught.exception, hc.ContextLengthError)
 

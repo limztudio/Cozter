@@ -37,7 +37,7 @@ def _completion(calls=(), text=""):
 def _response(events):
     wire = b"".join(f"data: {json.dumps(event)}\n\n".encode() for event in events)
     wire += b"data: [DONE]\n\n"
-    return sse_fixture._SSEResponse([wire[:13], wire[13:31], wire[31:]])
+    return sse_fixture.SseResponse([wire[:13], wire[13:31], wire[31:]])
 
 
 def _strict_object(raw):
@@ -79,7 +79,7 @@ class _StrictMetaSession:
                     _strict_object(call["function"]["arguments"])
         except (KeyError, TypeError, ValueError):
             self.rejected += 1
-            error = sse_fixture._SSEResponse([b'{"error":{"message":"Tool arguments must be valid JSON objects"}}'])
+            error = sse_fixture.SseResponse([b'{"error":{"message":"Tool arguments must be valid JSON objects"}}'])
             error.status = 400
             return error
         if not self.responses:

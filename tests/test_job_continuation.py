@@ -10,7 +10,7 @@ from Cozter.tests.helpers import persist_queue_entry
 
 from Cozter import agent, session, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
-from Cozter.tests.test_reply_delivery import _ReplyDeliveryBot
+from Cozter.tests.test_reply_delivery import ReplyDeliveryBot
 
 
 class JobContinuationTests(unittest.IsolatedAsyncioTestCase):
@@ -22,7 +22,7 @@ class JobContinuationTests(unittest.IsolatedAsyncioTestCase):
             return_value=("flexible", "", "", "full", "meta"),
         ))
         self.enterContext(mock.patch.object(agent, "_run_post_turn_maintenance", mock.AsyncMock()))
-        self.bot = _ReplyDeliveryBot(self.tmp, fail_final=False)
+        self.bot = ReplyDeliveryBot(self.tmp, fail_final=False)
         self.sid = session.create_session(self.tmp, name="Original job")["id"]
 
     async def asyncTearDown(self):
@@ -153,7 +153,7 @@ class JobContinuationTests(unittest.IsolatedAsyncioTestCase):
                          [original, "Later request"])
 
         switched_ws = self.enterContext(tempfile.TemporaryDirectory())
-        restarted = _ReplyDeliveryBot(switched_ws, fail_final=False)
+        restarted = ReplyDeliveryBot(switched_ws, fail_final=False)
         resumed_calls = []
 
         async def finish_after_restart(prompt, ws, **kwargs):
@@ -206,7 +206,7 @@ class JobContinuationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(session.load_session(self.tmp, scheduled_sid))
         self.assertEqual(len(self.bot._read_queue_file()["u1"]), 2)
 
-        restarted = _ReplyDeliveryBot(self.tmp, fail_final=False)
+        restarted = ReplyDeliveryBot(self.tmp, fail_final=False)
         calls = []
 
         async def resumed(prompt, ws, **kwargs):
@@ -255,7 +255,7 @@ class JobContinuationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item["text"] for item in self.bot._read_queue_file()["u1"]],
                          [original, "Later scheduled task"])
 
-        restarted = _ReplyDeliveryBot(self.tmp, fail_final=False)
+        restarted = ReplyDeliveryBot(self.tmp, fail_final=False)
         with (mock.patch.object(restarted, "_start_queue_drain"),
               mock.patch.object(agent, "run", mock.AsyncMock()) as run):
             await restarted.restore_queues()
@@ -567,7 +567,7 @@ class JobContinuationTests(unittest.IsolatedAsyncioTestCase):
                          [original, "Later request"])
 
         switched_ws = self.enterContext(tempfile.TemporaryDirectory())
-        restarted = _ReplyDeliveryBot(switched_ws, fail_final=False)
+        restarted = ReplyDeliveryBot(switched_ws, fail_final=False)
         resumed = []
 
         async def finish(prompt, ws, **kwargs):

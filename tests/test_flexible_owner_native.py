@@ -60,7 +60,7 @@ class FlexibleOwnerNativeTests(unittest.IsolatedAsyncioTestCase):
         return result
 
     async def test_all_four_start_specialist_first_and_reuse_separate_owner_and_helper_uuids(self):
-        for _module, cls, _model in native_fixture._CASES:
+        for _module, cls, _model in native_fixture.CASES:
             with self.subTest(backend=cls.name):
                 self._select_workers(cls.name)
                 sid = self._conversation()
@@ -97,7 +97,7 @@ class FlexibleOwnerNativeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.merge_prompts, [])
 
     async def test_all_four_resume_interrupted_initial_specialist_before_starting_owner(self):
-        for _module, cls, _model in native_fixture._CASES:
+        for _module, cls, _model in native_fixture.CASES:
             with self.subTest(backend=cls.name):
                 self._select_workers(cls.name)
                 sid = self._conversation()
@@ -127,7 +127,7 @@ class FlexibleOwnerNativeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.merge_prompts, [])
 
     async def test_judge_reopens_same_high_owner_without_replanning_or_replaying_initial_advice(self):
-        for _module, cls, _model in native_fixture._CASES:
+        for _module, cls, _model in native_fixture.CASES:
             for missing in (False, True):
                 with self.subTest(backend=cls.name, missing=missing):
                     self._select_workers(cls.name)

@@ -6,14 +6,14 @@ import unittest
 from unittest import mock
 
 from Cozter.agent_tools.plugins import http_request
-from Cozter.tests.test_agent_plugins import _FakeResponse, _FakeSession
+from Cozter.tests.test_agent_plugins import FakeResponse, FakeSession
 
 
 class HttpBodySniffTests(unittest.TestCase):
     def test_nested_json_body_uses_plain_text_if_the_optional_parser_refuses_it(self) -> None:
         body = '{"nested":' + '[' * 2_000 + '0' + ']' * 2_000 + '}'
-        session = _FakeSession([
-            _FakeResponse(status=200, url="https://api.example.com/",
+        session = FakeSession([
+            FakeResponse(status=200, url="https://api.example.com/",
                           headers={"Content-Type": "text/plain"}, body=b"accepted"),
         ])
 

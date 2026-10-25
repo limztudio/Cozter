@@ -90,8 +90,8 @@ async def _fetch_following_redirects(
                     f"'{content_type}', not readable text.",
                 )
 
-            body, _fetch_capped = await read_bounded_text(response)
-            return final_url, content_type, body, _fetch_capped
+            body, fetch_capped = await read_bounded_text(response)
+            return final_url, content_type, body, fetch_capped
 
 
 class WebFetchTool(AgentTool):

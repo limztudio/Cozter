@@ -27,7 +27,7 @@ from ._openai_agent import (
 from .base import effort_band
 
 
-class _FallbackModelSpec(NamedTuple):
+class _MetaModelSpec(NamedTuple):
     """Curated Meta Model API fallback metadata for one chat model."""
 
     name: str
@@ -37,12 +37,12 @@ class _FallbackModelSpec(NamedTuple):
 
 # https://dev.meta.ai/docs/models and /docs/reasoning (2026-10-21).
 _FALLBACK_MODEL_SPECS = (
-    _FallbackModelSpec("muse-wonder-1.0", 1_048_576, True),
-    _FallbackModelSpec("muse-spark-1.3", 1_048_576, True),
-    _FallbackModelSpec("muse-spark-1.3-contributor", 1_048_576, False),
-    _FallbackModelSpec("muse-spark-1.2", 1_048_576, False),
-    _FallbackModelSpec("muse-spark-1.2-contributor", 1_048_576, False),
-    _FallbackModelSpec("muse-spark-1.1", 1_048_576, False),
+    _MetaModelSpec("muse-wonder-1.0", 1_048_576, True),
+    _MetaModelSpec("muse-spark-1.3", 1_048_576, True),
+    _MetaModelSpec("muse-spark-1.3-contributor", 1_048_576, False),
+    _MetaModelSpec("muse-spark-1.2", 1_048_576, False),
+    _MetaModelSpec("muse-spark-1.2-contributor", 1_048_576, False),
+    _MetaModelSpec("muse-spark-1.1", 1_048_576, False),
 )
 _FALLBACK_MODELS = tuple(spec.name for spec in _FALLBACK_MODEL_SPECS)
 _MODEL_CONTEXT_WINDOWS = {

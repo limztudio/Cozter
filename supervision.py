@@ -15,9 +15,9 @@ from typing import Any
 import uuid
 
 logger = logging.getLogger(__name__)
-_worker: ContextVar[Worker | None] = ContextVar("cozter_supervised_worker", default=None)
-_operation: ContextVar[Operation | None] = ContextVar("cozter_supervised_operation", default=None)
-_disabled: ContextVar[bool] = ContextVar("cozter_supervision_disabled", default=False)
+_WORKER: ContextVar[Worker | None] = ContextVar("cozter_supervised_worker", default=None)
+_OPERATION: ContextVar[Operation | None] = ContextVar("cozter_supervised_operation", default=None)
+_DISABLED: ContextVar[bool] = ContextVar("cozter_supervision_disabled", default=False)
 
 
 @dataclass(frozen=True)
@@ -53,48 +53,48 @@ class Operation:
 
 @contextmanager
 def worker_scope(workspace_path: str, *, summary_backend_name: str, summary_model: str | None) -> Iterator[None]:
-    token = _worker.set(Worker(workspace_path, summary_backend_name, summary_model))
+    token = _WORKER.set(Worker(workspace_path, summary_backend_name, summary_model))
     try:
         yield
     finally:
-        _worker.reset(token)
+        _WORKER.reset(token)
 
 
 @contextmanager
 def operation_scope(ticket: Operation | None) -> Iterator[None]:
-    token = _operation.set(ticket)
+    token = _OPERATION.set(ticket)
     try:
         yield
     finally:
-        _operation.reset(token)
+        _OPERATION.reset(token)
 
 
 @contextmanager
 def diagnostic_scope() -> Iterator[None]:
-    token = _disabled.set(True)
+    token = _DISABLED.set(True)
     try:
         with operation_scope(None):
             yield
     finally:
-        _disabled.reset(token)
+        _DISABLED.reset(token)
 
 
 def new_operation(workspace_path: str, kind: str, details: str = "") -> Operation | None:
-    worker = _worker.get()
-    if worker is None or _disabled.get():
+    worker = _WORKER.get()
+    if worker is None or _DISABLED.get():
         return None
     return Operation(Worker(workspace_path, worker.backend, worker.model), kind, details[:4000])
 
 
 def mark_replannable_read() -> None:
     """Let the owned, killable builtin search yield to a narrower query."""
-    ticket = _operation.get()
+    ticket = _OPERATION.get()
     if ticket is not None and ticket.kind == "tool:grep":
         ticket.can_replan = True
 
 
 def attach_process(proc: Any, command: str = "") -> None:
-    ticket = _operation.get()
+    ticket = _OPERATION.get()
     if ticket is None:
         return
     if ticket.process is not proc:
@@ -108,14 +108,14 @@ def attach_process(proc: Any, command: str = "") -> None:
 
 
 def note_command(command: str) -> None:
-    ticket = _operation.get()
+    ticket = _OPERATION.get()
     if ticket is not None and command and command != ticket.command:
         ticket.command = command[:12000]
         _advance(ticket)
 
 
 def note_output(data: bytes | str) -> None:
-    ticket = _operation.get()
+    ticket = _OPERATION.get()
     if ticket is None or not data:
         return
     value = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else data
@@ -125,7 +125,7 @@ def note_output(data: bytes | str) -> None:
 
 def note_progress() -> None:
     """Record useful progress without retaining private provider reasoning."""
-    ticket = _operation.get()
+    ticket = _OPERATION.get()
     if ticket is not None:
         _advance(ticket)
 

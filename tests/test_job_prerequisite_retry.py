@@ -12,14 +12,14 @@ from Cozter.tests.helpers import persist_queue_entry
 from Cozter import session, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
 from Cozter.backends_bot import base
-from Cozter.tests.test_reply_delivery import _ReplyDeliveryBot
+from Cozter.tests.test_reply_delivery import ReplyDeliveryBot
 
 
 class JobPrerequisiteRetryTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.ws = self.enterContext(tempfile.TemporaryDirectory())
         self.enterContext(mock.patch.object(workspace, "CONFIG_DIR", self.ws))
-        self.bot = _ReplyDeliveryBot(self.ws, fail_final=False)
+        self.bot = ReplyDeliveryBot(self.ws, fail_final=False)
         self.sid = session.create_session(self.ws, name="Preserved job")["id"]
         self.original = "Repair every requested target, verify it, and commit the result"
 
@@ -101,7 +101,7 @@ class JobPrerequisiteRetryTests(unittest.IsolatedAsyncioTestCase):
     async def test_future_retry_survives_restart_and_due_head_wakes_once(self):
         entry = await self.waiting(retry_at=1200)
         later = await self.enqueue("Later work")
-        restarted = _ReplyDeliveryBot(self.ws, fail_final=False)
+        restarted = ReplyDeliveryBot(self.ws, fail_final=False)
         with mock.patch.object(restarted, "_drain_message_queue", mock.AsyncMock()) as drain:
             await restarted.restore_queues()
             await asyncio.sleep(0)
@@ -260,7 +260,7 @@ class JobPrerequisiteRetryTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(asyncio.CancelledError):
                     await poll
             wake.assert_not_called()
-        restarted = _ReplyDeliveryBot(self.ws, fail_final=False)
+        restarted = ReplyDeliveryBot(self.ws, fail_final=False)
         with mock.patch.object(restarted, "_start_queue_drain") as wake:
             await restarted.restore_queues()
             wake.assert_called_once_with("u1")

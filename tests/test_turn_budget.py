@@ -13,7 +13,7 @@ from Cozter import agent, flexible, session, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent, append_text_result
 from Cozter.backends_bot.base import _InjectQueue
 from Cozter.tests.helpers import persist_queue_entry, create_python_script_process
-from Cozter.tests.test_reply_delivery import _ReplyDeliveryBot
+from Cozter.tests.test_reply_delivery import ReplyDeliveryBot
 
 
 
@@ -265,7 +265,7 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_job_continuation_renews_budget_without_duplicating_artifacts(self):
         seen = []
-        bot = _ReplyDeliveryBot(self.ws, fail_final=False)
+        bot = ReplyDeliveryBot(self.ws, fail_final=False)
         artifact = os.path.join(self.ws, "result.txt")
 
         async def implementation(turn, *_args, **_kwargs):
@@ -529,7 +529,7 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_long_request_completes_before_next_queue_entry(self):
         self.enterContext(mock.patch.object(workspace, "CONFIG_DIR", self.ws))
-        bot = _ReplyDeliveryBot(self.ws, fail_final=False)
+        bot = ReplyDeliveryBot(self.ws, fail_final=False)
         started, release = asyncio.Event(), asyncio.Event()
         prompts = []
 

@@ -11,7 +11,7 @@ from Cozter.tests.helpers import persist_queue_entry
 
 from Cozter import agent, execution_state, flexible, session, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
-from Cozter.tests.test_reply_delivery import _ReplyDeliveryBot
+from Cozter.tests.test_reply_delivery import ReplyDeliveryBot
 
 
 class FlexibleContinuationTests(unittest.IsolatedAsyncioTestCase):
@@ -51,7 +51,7 @@ class FlexibleContinuationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_real_durable_bot_crosses_two_allowances_with_one_plan_and_no_completed_replay(self):
         original = "Repair and verify the four requested parts, then commit."
-        bot = _ReplyDeliveryBot(self.ws, fail_final=False)
+        bot = ReplyDeliveryBot(self.ws, fail_final=False)
         bot.supports_transient_status = False
         entry = await persist_queue_entry(bot, "u1", original, "chat")
         bot._ensure_message_queue("u1").put_nowait((original, "chat", entry, False))

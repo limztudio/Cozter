@@ -13,7 +13,7 @@ from unittest import mock
 from Cozter import execution_state
 from Cozter.backends_agent import _openai_agent as oa
 from Cozter.tests.helpers import OfflineHttpBackend
-from Cozter.tests.test_http_execution_continuation import _call
+from Cozter.tests.test_http_execution_continuation import make_tool_call
 
 
 _TRANSCRIPT_FIELDS = {
@@ -52,10 +52,10 @@ class HttpPendingCheckpointTests(unittest.IsolatedAsyncioTestCase):
     async def test_pending_barriers_keep_exact_legacy_atomic_snapshot_bytes(self):
         snapshots = {"legacy": [], "candidate": []}
         fields = {}
-        calls = [_call(str(index), path=str(index)) for index in range(4)]
-        calls.append(_call("write", "write_file"))
-        calls.extend(_call(str(index), path=str(index)) for index in range(5, 9))
-        calls.append(_call("build", "bash"))
+        calls = [make_tool_call(str(index), path=str(index)) for index in range(4)]
+        calls.append(make_tool_call("write", "write_file"))
+        calls.extend(make_tool_call(str(index), path=str(index)) for index in range(5, 9))
+        calls.append(make_tool_call("build", "bash"))
         original_write = execution_state._write_snapshot
 
         with tempfile.TemporaryDirectory() as workspace:
@@ -79,7 +79,7 @@ class HttpPendingCheckpointTests(unittest.IsolatedAsyncioTestCase):
                         disk = json.loads(record.path.read_bytes())["values"]
                         self.assertEqual(disk["http_messages"][-1]["tool_calls"], calls)
                         if name == "write_file":
-                            self.assertEqual(set(disk["http_pending_results"]), {str(i) for i in range(4)})
+                            self.assertEqual(set(disk["http_pending_results"]), {str(index) for index in range(4)})
                         if name == "bash":
                             self.assertEqual(disk["http_pending_results"]["4"], "write_file evidence")
                         return name + " evidence"
@@ -104,7 +104,7 @@ class HttpPendingCheckpointTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancelled_read_wave_persists_only_outcomes_and_recovers_finished_evidence(self):
         waiting = asyncio.Event()
         sibling_settled = asyncio.Event()
-        calls = [_call("finished"), _call("waiting")]
+        calls = [make_tool_call("finished"), make_tool_call("waiting")]
         requests = []
         with tempfile.TemporaryDirectory() as workspace:
             async with execution_state.execution_scope(workspace, "read-job", "synthetic request"):
@@ -158,7 +158,7 @@ class HttpPendingCheckpointTests(unittest.IsolatedAsyncioTestCase):
         entered = threading.Event()
         release = threading.Event()
         settled = threading.Event()
-        calls = [_call("write", "write_file"), _call("next", "bash")]
+        calls = [make_tool_call("write", "write_file"), make_tool_call("next", "bash")]
         mutations = []
         original_write = execution_state._write_snapshot
         requests = []

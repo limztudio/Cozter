@@ -93,10 +93,10 @@ class OpenAIRetryLoopTests(unittest.TestCase):
         self.assertEqual(calls["n"], 3)
 
     def test_retry_discards_partial_reasoning_from_failed_stream(self) -> None:
-        failed = _SSEResponse([
+        failed = SseResponse([
             b'data: {"choices":[{"delta":{"reasoning_content":"old"}}]}\n\n',
         ])
-        succeeded = _SSEResponse([
+        succeeded = SseResponse([
             b'data: {"choices":[{"delta":{"reasoning_content":"new"}}]}\n\n'
             b'data: {"choices":[{"delta":{"content":"answer"}}]}\n\n'
             b'data: [DONE]\n\n',
@@ -105,7 +105,7 @@ class OpenAIRetryLoopTests(unittest.TestCase):
             mock.patch.object(
                 oa.aiohttp,
                 "ClientSession",
-                side_effect=[_SSESession(failed), _SSESession(succeeded)],
+                side_effect=[SseSession(failed), SseSession(succeeded)],
             ),
             mock.patch.object(oa, "_backoff_delay", return_value=0.0),
         ):
@@ -127,7 +127,7 @@ class OpenAIRetryLoopTests(unittest.TestCase):
         self.assertEqual(calls["n"], 3)  # initial + 2 retries
 
 
-class _SSEContent:
+class _SseContent:
     def __init__(self, chunks: list[bytes]) -> None:
         self._chunks = chunks
 
@@ -150,7 +150,7 @@ class _SSEContent:
         return b"".join(parts)
 
 
-class _ReadableContent(_SSEContent):
+class _ReadableContent(_SseContent):
     """Minimal response body stub that records bounded read requests."""
 
     def __init__(self, chunks: list[bytes]) -> None:
@@ -169,43 +169,43 @@ class _ReadableContent(_SSEContent):
         return chunk[:size]
 
 
-class _SSEResponse:
+class SseResponse:
     def __init__(self, chunks: list[bytes]) -> None:
         self.status = 200
         self.headers: dict[str, str] = {}
-        self.content = _SSEContent(chunks)
+        self.content = _SseContent(chunks)
 
     async def __aenter__(self):
         return self
 
-    async def __aexit__(self, exc_type, exc, tb) -> None:
+    async def __aexit__(self, exc_type, exc, traceback) -> None:
         return None
 
     async def text(self) -> str:
         return ""
 
 
-class _SSESession:
-    def __init__(self, response: _SSEResponse) -> None:
+class SseSession:
+    def __init__(self, response: SseResponse) -> None:
         self._response = response
 
     async def __aenter__(self):
         return self
 
-    async def __aexit__(self, exc_type, exc, tb) -> None:
+    async def __aexit__(self, exc_type, exc, traceback) -> None:
         return None
 
-    def post(self, *args, **kwargs) -> _SSEResponse:
+    def post(self, *args, **kwargs) -> SseResponse:
         return self._response
 
 
 class OpenAIStreamShapeTests(unittest.TestCase):
     def test_sse_line_cap_aborts_instead_of_accepting_following_events(self) -> None:
         async def collect() -> None:
-            content = _SSEContent([b"x" * 2048, b"\nvalid\n"])
+            content = _SseContent([b"x" * 2048, b"\nvalid\n"])
             with (
                 mock.patch.object(oa, "_MAX_SSE_LINE_BYTES", 1024),
-                self.assertRaisesRegex(oa._SSEEventTooLargeError, "SSE line exceeded"),
+                self.assertRaisesRegex(oa._SseEventTooLargeError, "SSE line exceeded"),
             ):
                 _ = [line async for line in oa._iter_sse_lines(content)]
 
@@ -229,12 +229,12 @@ class OpenAIStreamShapeTests(unittest.TestCase):
     def test_stream_once_runs_without_wall_clock_timeout(self) -> None:
         captured: list[object] = []
 
-        class RecordingSession(_SSESession):
+        class RecordingSession(SseSession):
             def post(self, *args, **kwargs):
                 captured.append(kwargs.get("timeout"))
                 return super().post(*args, **kwargs)
 
-        response = _SSEResponse([
+        response = SseResponse([
             b'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n'
             b'data: [DONE]\n\n',
         ])
@@ -260,8 +260,8 @@ class OpenAIStreamShapeTests(unittest.TestCase):
         ]
         if include_done:
             lines.append(b"data: [DONE]\n\n")
-        response = _SSEResponse([b"".join(lines)])
-        session = _SSESession(response)
+        response = SseResponse([b"".join(lines)])
+        session = SseSession(response)
         with mock.patch.object(oa.aiohttp, "ClientSession", return_value=session):
             return asyncio.run(oa._stream_once(
                 "http://x/chat/completions", {}, {}, "test",
@@ -381,11 +381,11 @@ class OpenAIStreamShapeTests(unittest.TestCase):
 
     def test_http_errors_preserve_bodies_within_the_preview_cap(self) -> None:
         async def stream(status: int, body: str) -> None:
-            response = _SSEResponse([])
+            response = SseResponse([])
             response.status = status
             response.content = _ReadableContent([body.encode()])
             with mock.patch.object(
-                oa.aiohttp, "ClientSession", return_value=_SSESession(response),
+                oa.aiohttp, "ClientSession", return_value=SseSession(response),
             ), self.assertRaises(RuntimeError) as raised:
                 await oa._stream_once("http://x/chat/completions", {}, {}, "test")
             self.assertEqual(str(raised.exception), f"test returned HTTP {status}: {body}")
@@ -400,10 +400,10 @@ class OpenAIStreamShapeTests(unittest.TestCase):
             content = _ReadableContent([
                 b"x" * (oa._MAX_HTTP_ERROR_BODY_BYTES * 2),
             ])
-            response = _SSEResponse([])
+            response = SseResponse([])
             response.status = 400
             response.content = content
-            session = _SSESession(response)
+            session = SseSession(response)
             with mock.patch.object(
                 oa.aiohttp, "ClientSession", return_value=session,
             ), self.assertRaisesRegex(RuntimeError, "HTTP 400"):
@@ -515,14 +515,14 @@ class OpenAIStreamShapeTests(unittest.TestCase):
 
     def test_multiline_sse_data_event_is_decoded_once(self) -> None:
         async def stream() -> tuple[str, str, list[dict]]:
-            content = _SSEContent([
+            content = _SseContent([
                 b'data: {"choices":\n'
                 b'data: [{"delta":{"content":"hello"}}]}\n\n'
                 b'data: [DONE]\n\n',
             ])
-            response = _SSEResponse([])
+            response = SseResponse([])
             response.content = content
-            session = _SSESession(response)
+            session = SseSession(response)
             with mock.patch.object(
                 oa.aiohttp, "ClientSession", return_value=session,
             ):
@@ -537,14 +537,14 @@ class OpenAIStreamShapeTests(unittest.TestCase):
 
     def test_multiline_sse_event_has_an_aggregate_size_cap(self) -> None:
         async def collect() -> None:
-            content = _SSEContent([
+            content = _SseContent([
                 b"data: abc\n"
                 b"data: def\n\n",
             ])
             with (
                 mock.patch.object(oa, "_MAX_SSE_EVENT_BYTES", 5),
                 self.assertRaisesRegex(
-                    oa._SSEEventTooLargeError, "event exceeded",
+                    oa._SseEventTooLargeError, "event exceeded",
                 ),
             ):
                 _ = [event async for event in oa._iter_sse_events(content)]
@@ -753,7 +753,7 @@ class _ReasoningToolBackend(_ToolLimitBackend):
         return {"thinking": {"type": "enabled", "clear_thinking": False}}
 
 
-class _EventCaptureProcess:
+class EventCaptureProcess:
     def __init__(self) -> None:
         self.events: list[dict] = []
 
@@ -761,7 +761,7 @@ class _EventCaptureProcess:
         self.events.append(event)
 
 
-def _tool_call(call_id: str, path: str) -> dict:
+def make_tool_call(call_id: str, path: str) -> dict:
     return {
         "id": call_id,
         "type": "function",
@@ -776,10 +776,10 @@ async def _execute_ok(name, _args, _workspace_path, _approval, _emit):
     return f"{name} ok"
 
 
-def _run_tool_fixture(stream, execute_tool, backend=None) -> _EventCaptureProcess:
+def _run_tool_fixture(stream, execute_tool, backend=None) -> EventCaptureProcess:
     oa._stream_completion = stream
     oa.tools.execute_tool = execute_tool
-    proc = _EventCaptureProcess()
+    proc = EventCaptureProcess()
     if backend is None:
         backend = _ToolLimitBackend(auto_continue=False)
     asyncio.run(backend._run_agent(
@@ -804,7 +804,7 @@ class OpenAIToolLimitTests(unittest.TestCase):
             payload = args[1]
             calls.append(copy.deepcopy(payload))
             if len(calls) <= 2:
-                return "", "", [_tool_call(f"call-{len(calls)}", "x.txt")]
+                return "", "", [make_tool_call(f"call-{len(calls)}", "x.txt")]
             return "done", "", []
 
         async def execute_tool(name, args, workspace_path, approval, emit):
@@ -831,7 +831,7 @@ class OpenAIToolLimitTests(unittest.TestCase):
             payload = args[1]
             calls.append(copy.deepcopy(payload))
             if len(calls) == 1:
-                return "", "", [_tool_call("call-1", "x.txt")]
+                return "", "", [make_tool_call("call-1", "x.txt")]
             return "", "", []
 
         proc = _run_tool_fixture(stream, _execute_ok)
@@ -852,14 +852,14 @@ class OpenAIToolLimitTests(unittest.TestCase):
             payload = args[1]
             calls.append(copy.deepcopy(payload))
             if "tools" in payload:
-                return "", "", [_tool_call(f"call-{len(calls)}", f"file-{len(calls)}.txt")]
+                return "", "", [make_tool_call(f"call-{len(calls)}", f"file-{len(calls)}.txt")]
             return "Repair completed; final verification remains.", "", []
 
         oa._stream_completion = stream
         oa.tools.execute_tool = mock.AsyncMock(return_value="read evidence")
         backend = _ToolLimitBackend(auto_continue=True)
         with mock.patch.object(backend, "_max_segments", return_value=2):
-            proc = _EventCaptureProcess()
+            proc = EventCaptureProcess()
             asyncio.run(backend._run_agent(
                 proc, "/tmp", "work", None, "full", False, 100,
             ))
@@ -878,7 +878,7 @@ class OpenAIToolLimitTests(unittest.TestCase):
             payload = args[1]
             calls.append(copy.deepcopy(payload))
             if len(calls) == 1:
-                return "", "", [_tool_call("call-1", "x.txt")]
+                return "", "", [make_tool_call("call-1", "x.txt")]
             return "done", "", []
 
         _run_tool_fixture(stream, _execute_ok, _ToolStreamingBackend(auto_continue=False))
@@ -894,7 +894,7 @@ class OpenAIToolLimitTests(unittest.TestCase):
             return "done", "", []
 
         oa._stream_completion = stream
-        proc = _EventCaptureProcess()
+        proc = EventCaptureProcess()
         asyncio.run(_NoToolBackend(auto_continue=False)._run_agent(
             proc, "/tmp", "work", None, "auto", False, 0,
         ))
@@ -919,7 +919,7 @@ class OpenAIToolLimitTests(unittest.TestCase):
                 return (
                     "Checking the file.",
                     "Need inspect the file before answering.",
-                    [_tool_call("call-1", "x.txt")],
+                    [make_tool_call("call-1", "x.txt")],
                 )
             return "Done.", "", []
 
@@ -939,7 +939,7 @@ class OpenAIToolLimitTests(unittest.TestCase):
             "role": "assistant",
             "content": "Checking the file.",
             "reasoning_content": "Need inspect the file before answering.",
-            "tool_calls": [_tool_call("call-1", "x.txt")],
+            "tool_calls": [make_tool_call("call-1", "x.txt")],
         })
         self.assertEqual(calls[1]["messages"][-2], {
             "role": "tool",
@@ -959,7 +959,7 @@ class OpenAIToolLimitTests(unittest.TestCase):
 
         async def stream(*args, **kwargs):
             calls.append(copy.deepcopy(args[1]))
-            return "x" * 10_000, "", [_tool_call("call-1", "x.txt")]
+            return "x" * 10_000, "", [make_tool_call("call-1", "x.txt")]
 
         async def execute_tool(name, args, workspace_path, approval, emit):
             nonlocal executed
@@ -969,7 +969,7 @@ class OpenAIToolLimitTests(unittest.TestCase):
         oa._stream_completion = stream
         oa.tools.execute_tool = execute_tool
 
-        proc = _EventCaptureProcess()
+        proc = EventCaptureProcess()
         with (
             mock.patch.object(oa, "_MAX_AGENT_MESSAGE_BYTES", 9_000),
             mock.patch.object(skills, "current_catalog", return_value=skills.SkillCatalog("/tmp", (), ())),
@@ -1005,8 +1005,8 @@ class OpenAIParallelToolTests(unittest.TestCase):
             payloads.append(copy.deepcopy(args[1]))
             if len(payloads) == 1:
                 return "", "", [
-                    _tool_call("c1", "a.txt"),
-                    _tool_call("c2", "b.txt"),
+                    make_tool_call("c1", "a.txt"),
+                    make_tool_call("c2", "b.txt"),
                 ]
             return "done", "", []
 
@@ -1042,7 +1042,7 @@ class OpenAIParallelToolTests(unittest.TestCase):
         async def stream(*args, **kwargs):
             payloads.append(copy.deepcopy(args[1]))
             if len(payloads) == 1:
-                duplicate_call = _tool_call("c-base", "x.txt")
+                duplicate_call = make_tool_call("c-base", "x.txt")
                 batch = []
                 for attempt in range(4):
                     one = copy.deepcopy(duplicate_call)

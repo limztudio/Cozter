@@ -19,7 +19,7 @@ class _ReasoningBackend(OfflineHttpBackend):
         return True
 
 
-def _call(call_id, name="read_file", path="file.txt"):
+def make_tool_call(call_id, name="read_file", path="file.txt"):
     return {
         "id": call_id, "type": "function",
         "function": {"name": name, "arguments": json.dumps({"path": path})},
@@ -48,7 +48,7 @@ class HttpExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
         requests = []
 
         async def first_stream(*args, **kwargs):
-            return "", "", [_call("write", "write_file"), _call("build", "bash")]
+            return "", "", [make_tool_call("write", "write_file"), make_tool_call("build", "bash")]
 
         async def execute(name, args, *unused):
             if name == "write_file":
@@ -87,7 +87,7 @@ class HttpExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
             await self._run(prompt="Continue; also inspect the new requirement.")
         tool.assert_not_awaited()
         self.assertEqual(writes, ["file.txt"])
-        results = [m for m in requests[0]["messages"] if m["role"] == "tool"]
+        results = [message for message in requests[0]["messages"] if message["role"] == "tool"]
         self.assertEqual(results[0]["content"], "wrote file once")
         self.assertIn("outcome is unknown", results[1]["content"])
         self.assertIn("Do not automatically replay", results[1]["content"])
@@ -102,7 +102,7 @@ class HttpExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
             nonlocal count
             count += 1
             if count == 1:
-                return "Inspecting", "", [_call("read")]
+                return "Inspecting", "", [make_tool_call("read")]
             raise asyncio.CancelledError
 
         with (
@@ -126,9 +126,9 @@ class HttpExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(oa, "_stream_completion", side_effect=resume),
         ):
             await self._run()
-        self.assertEqual([m["content"] for m in captured if m["role"] == "tool"],
+        self.assertEqual([message["content"] for message in captured if message["role"] == "tool"],
                          ["saved read evidence"])
-        self.assertEqual(sum(m["role"] == "user" for m in captured), 1)
+        self.assertEqual(sum(message["role"] == "user" for message in captured), 1)
 
     async def test_real_disk_record_survives_new_execution_object(self):
         stream_calls = 0
@@ -137,7 +137,7 @@ class HttpExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
             nonlocal stream_calls
             stream_calls += 1
             if stream_calls == 1:
-                return "", "", [_call("write", "write_file")]
+                return "", "", [make_tool_call("write", "write_file")]
             raise asyncio.CancelledError
 
         with tempfile.TemporaryDirectory() as temp:
@@ -173,8 +173,8 @@ class HttpExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
                     async with execution_state.backend_scope(OfflineHttpBackend.name, "model-a", "full", 50):
                         await self._run(workspace=temp, prompt="Continue and verify the existing output.")
             tool.assert_not_awaited()
-            self.assertTrue(any(m.get("content") == "wrote output.txt"
-                                for m in requests[0]["messages"]))
+            self.assertTrue(any(message.get("content") == "wrote output.txt"
+                                for message in requests[0]["messages"]))
 
     async def test_reasoning_state_is_retained_but_current_system_is_rebuilt(self):
         record = OfflineRecord()
@@ -184,7 +184,7 @@ class HttpExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
             nonlocal calls
             calls += 1
             if calls == 1:
-                return "", "opaque provider state", [_call("read")]
+                return "", "opaque provider state", [make_tool_call("read")]
             raise asyncio.CancelledError
 
         with (
@@ -213,7 +213,7 @@ class HttpExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(captured[0]["content"].startswith("fresh policy\n\n"))
         self.assertIn(skills.refresh_instructions(), captured[0]["content"])
         self.assertIn("No skills are currently discoverable", captured[0]["content"])
-        self.assertTrue(any(m.get("reasoning_content") == "opaque provider state" for m in captured))
+        self.assertTrue(any(message.get("reasoning_content") == "opaque provider state" for message in captured))
         self.assertNotIn("opaque provider state", str(proc.events))
 
     async def test_model_or_permission_change_does_not_reuse_transcript(self):
@@ -248,9 +248,9 @@ class HttpExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("tools", stream.call_args.args[1])
 
     async def test_read_batches_are_bounded_and_writes_are_ordered_barriers(self):
-        calls = [_call(str(i), path=f"before-{i}") for i in range(10)]
-        calls += [_call("write", "write_file", "mutation")]
-        calls += [_call(f"after-{i}", path=f"after-{i}") for i in range(3)]
+        calls = [make_tool_call(str(index), path=f"before-{index}") for index in range(10)]
+        calls += [make_tool_call("write", "write_file", "mutation")]
+        calls += [make_tool_call(f"after-{index}", path=f"after-{index}") for index in range(3)]
         requests = []
         active = peak = 0
         written = False
@@ -281,12 +281,12 @@ class HttpExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
         ):
             await self._run()
         self.assertEqual(peak, oa._PARALLEL_READ_TOOLS)
-        self.assertEqual([m["tool_call_id"] for m in requests[1]["messages"] if m["role"] == "tool"],
-                         [c["id"] for c in calls])
+        self.assertEqual([message["tool_call_id"] for message in requests[1]["messages"] if message["role"] == "tool"],
+                         [call["id"] for call in calls])
 
     async def test_read_wave_uses_one_complete_checkpoint_instead_of_one_per_read(self):
         record = OfflineRecord()
-        calls = [_call(str(i), path=str(i)) for i in range(4)]
+        calls = [make_tool_call(str(index), path=str(index)) for index in range(4)]
         requests = 0
 
         async def stream(*args, **kwargs):
@@ -308,7 +308,7 @@ class HttpExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
         # Initial request, durable call intent, complete ordered results, and
         # final answer. A read's completion no longer rewrites the full history.
         self.assertEqual(len(record.snapshots), 4)
-        self.assertEqual(sum(m["role"] == "tool" for m in record.values["http_messages"]), 4)
+        self.assertEqual(sum(message["role"] == "tool" for message in record.values["http_messages"]), 4)
 
     async def test_interrupted_read_wave_preserves_finished_read_and_settles_sibling(self):
         record = OfflineRecord()
@@ -327,8 +327,8 @@ class HttpExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
         with (
             mock.patch.object(oa, "current_run", return_value=record),
             mock.patch.object(oa, "_stream_completion", new_callable=mock.AsyncMock,
-                              return_value=("", "", [_call("one", path="finished"),
-                                                       _call("two", path="waiting")])),
+                              return_value=("", "", [make_tool_call("one", path="finished"),
+                                                       make_tool_call("two", path="waiting")])),
             mock.patch.object(oa.tools, "execute_tool", side_effect=read),
         ):
             task = asyncio.create_task(self._run())
@@ -345,8 +345,8 @@ class HttpExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_read_wave_and_each_mutation_are_durable_before_later_mutations(self):
         record = OfflineRecord()
-        calls = [_call(str(i), path=str(i)) for i in range(4)]
-        calls.extend([_call("write", "write_file"), _call("build", "bash")])
+        calls = [make_tool_call(str(index), path=str(index)) for index in range(4)]
+        calls.extend([make_tool_call("write", "write_file"), make_tool_call("build", "bash")])
         requests = 0
 
         async def stream(*args, **kwargs):
@@ -357,7 +357,7 @@ class HttpExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
         async def execute(name, args, *unused):
             if name == "write_file":
                 self.assertEqual(record.values["http_pending_results"],
-                                 {str(i): "read evidence" for i in range(4)})
+                                 {str(index): "read evidence" for index in range(4)})
                 return "mutation completed"
             if name == "bash":
                 self.assertEqual(record.values["http_pending_results"]["4"],
@@ -394,8 +394,8 @@ class HttpExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
         with (
             mock.patch.object(oa, "current_run", return_value=None),
             mock.patch.object(oa, "_stream_completion", new_callable=mock.AsyncMock,
-                              return_value=("", "", [_call("one", path="fails"),
-                                                       _call("two", path="waits")])),
+                              return_value=("", "", [make_tool_call("one", path="fails"),
+                                                       make_tool_call("two", path="waits")])),
             mock.patch.object(oa.tools, "execute_tool", side_effect=execute),
         ):
             with self.assertRaisesRegex(OSError, "checkpoint storage failed"):

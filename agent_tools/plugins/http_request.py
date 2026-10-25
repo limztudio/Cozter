@@ -168,10 +168,10 @@ async def _request_following_redirects(
             content_type = response.headers.get("content-type", "")
             if not _is_textual_content_type(content_type):
                 return status, current_method, str(response.url), content_type, None
-            text, _http_capped = await read_bounded_text(response)
+            text, http_capped = await read_bounded_text(response)
             return (
                 status, current_method, str(response.url), content_type,
-                with_fetch_cap_marker(text, _http_capped),
+                with_fetch_cap_marker(text, http_capped),
             )
 
 

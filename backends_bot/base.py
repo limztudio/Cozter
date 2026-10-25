@@ -437,8 +437,8 @@ class MessageHandle:
     message_id: str
 
 
-def _format_status_event_line(ev: agent.ChatEvent) -> str:
-    content = ev.content.split("\n")[0] if ev.kind == "tool" else ev.content
+def _format_status_event_line(event: agent.ChatEvent) -> str:
+    content = event.content.split("\n")[0] if event.kind == "tool" else event.content
     clipped = (
         content[:80 - len("… [clipped]")] + "… [clipped]"
         if len(content) > 80 else content
@@ -482,14 +482,14 @@ class _RecoverableTurnStatus:
             self.platform.platform_id, outcome, (time.monotonic() - started) * 1_000,
         )
 
-    def on_event(self, ev: agent.ChatEvent) -> None:
+    def on_event(self, event: agent.ChatEvent) -> None:
         if self.closed:
             return
-        if ev.kind == "text":
-            if ev.content.strip():
-                self.latest_text = ev.content
-        elif ev.kind in ("tool", "file"):
-            self.lines.append(_format_status_event_line(ev))
+        if event.kind == "text":
+            if event.content.strip():
+                self.latest_text = event.content
+        elif event.kind in ("tool", "file"):
+            self.lines.append(_format_status_event_line(event))
             self.total_lines += 1
         else:
             return
@@ -873,8 +873,8 @@ class BotPlatform(ABC):
         for target in self.notify_targets:
             try:
                 await self.send_text(target, message)
-            except Exception as e:
-                logger.warning("Failed to notify %s: %s", target, e)
+            except Exception as exc:
+                logger.warning("Failed to notify %s: %s", target, exc)
 
     async def send_status(self, chat_id: str, text: str) -> None:
         """Emit a transient progress/status message ("» <tool>", etc.).
@@ -1231,7 +1231,7 @@ class BotPlatform(ABC):
         """Drop the attribution record for *uid* (turn finished/cancelled)."""
         self._turn_progress.pop(uid, None)
 
-    def _record_turn_event_progress(self, uid: str, ev: object) -> None:
+    def _record_turn_event_progress(self, uid: str, event: object) -> None:
         """Fold one streamed event into *uid*'s attribution record.
 
         Only the event *kind* plus a redacted label are kept. The label
@@ -1242,8 +1242,8 @@ class BotPlatform(ABC):
         are never stored. ``file`` events record ``"file: change"``
         without any path; every other kind records just its kind.
         """
-        kind = getattr(ev, "kind", "")
-        content = getattr(ev, "content", "")
+        kind = getattr(event, "kind", "")
+        content = getattr(event, "content", "")
         if not isinstance(kind, str) or not kind.strip():
             return
         kind = kind.strip()
@@ -1487,11 +1487,11 @@ class BotPlatform(ABC):
         await ctx.reply_text("Cozter bot is running.")
 
     async def cmd_version(self, ctx: BotContext) -> None:
-        ver, date = await asyncio.gather(
+        version, date = await asyncio.gather(
             asyncio.to_thread(updater.get_current_version),
             asyncio.to_thread(updater.get_last_commit_date),
         )
-        await ctx.reply_text(f"Version: {ver}\nUpdated: {date}")
+        await ctx.reply_text(f"Version: {version}\nUpdated: {date}")
 
     async def cmd_doctor(self, ctx: BotContext) -> None:
         """Report readiness of every backend (CLI on PATH / server up)."""
@@ -1620,9 +1620,9 @@ class BotPlatform(ABC):
             return
         try:
             os.makedirs(path)
-        except OSError as e:
+        except OSError as exc:
             await ctx.reply_text(
-                f"Failed to create directory: {e}\n\n"
+                f"Failed to create directory: {exc}\n\n"
                 "Please try again (or /cancel):"
             )
             self._expect_input(ctx.user_id, self._receive_new_dir)
@@ -2129,8 +2129,8 @@ class BotPlatform(ABC):
             return
         try:
             workspace.set_permission(ws, perm)
-        except ValueError as e:
-            await ctx.reply_text(f"{e}\nTry again (or /cancel):")
+        except ValueError as exc:
+            await ctx.reply_text(f"{exc}\nTry again (or /cancel):")
             self._expect_input(ctx.user_id, self._receive_permission)
             return
         desc = workspace.PERMISSION_DESCRIPTIONS[perm]
@@ -2541,8 +2541,8 @@ class BotPlatform(ABC):
         ]
         if items:
             lines.append("Items:")
-            for item_index, it in enumerate(items, 1):
-                lines.append(f"  {item_index}. {it}")
+            for item_index, item in enumerate(items, 1):
+                lines.append(f"  {item_index}. {item}")
             lines.append("")
         lines.extend([
             "Usage:",
@@ -4425,34 +4425,34 @@ class BotPlatform(ABC):
         ws = await self._require_ws(ctx)
         if ws is None:
             return
-        att = ctx.attachment
-        assert att is not None  # dispatch_file already checked
+        attachment = ctx.attachment
+        assert attachment is not None  # dispatch_file already checked
 
-        rel_path = os.path.relpath(att.local_path, ws)
+        rel_path = os.path.relpath(attachment.local_path, ws)
         parts: list[str] = []
-        if att.caption:
-            parts.append(att.caption)
+        if attachment.caption:
+            parts.append(attachment.caption)
         parts.append(
-            f"[{att.kind.capitalize()} attachment saved to: {rel_path}]"
+            f"[{attachment.kind.capitalize()} attachment saved to: {rel_path}]"
         )
 
-        ext = os.path.splitext(att.filename)[1].lower()
+        ext = os.path.splitext(attachment.filename)[1].lower()
         if (
-            ext in IMAGE_EXTENSIONS or att.kind in ("photo", "video")
+            ext in IMAGE_EXTENSIONS or attachment.kind in ("photo", "video")
         ) and ext not in _TEXT_EXTENSIONS:
             try:
                 dims = await asyncio.to_thread(
-                    probe_image_dimensions, att.local_path,
+                    probe_image_dimensions, attachment.local_path,
                 )
                 size = 0
                 try:
-                    size = os.path.getsize(att.local_path)
+                    size = os.path.getsize(attachment.local_path)
                 except OSError:
                     size = 0
                 if dims is not None:
                     width, height, fmt = dims
                     parts.append(
-                        f"[Image: {att.filename} is a {width}x{height} {fmt}"
+                        f"[Image: {attachment.filename} is a {width}x{height} {fmt}"
                         f" ({size:,} bytes) at {rel_path}."
                         " Vision-capable backends receive these pixels"
                         " natively: describe what is actually in the image."
@@ -4462,7 +4462,7 @@ class BotPlatform(ABC):
                     )
                 elif size:
                     parts.append(
-                        f"[Image: {att.filename} ({size:,} bytes) at"
+                        f"[Image: {attachment.filename} ({size:,} bytes) at"
                         f" {rel_path}. Vision-capable backends receive its"
                         " pixels natively; otherwise say what you verified"
                         " and ask the user to describe the"
@@ -4474,11 +4474,11 @@ class BotPlatform(ABC):
             try:
                 # Read the decision boundary off-loop: never decode megabytes to decline.
                 content = await asyncio.to_thread(
-                    _read_inline_text_attachment, att.local_path,
+                    _read_inline_text_attachment, attachment.local_path,
                 )
                 if len(content) <= _INLINE_SIZE_LIMIT:
                     parts.append(
-                        f"[File contents of {att.filename}]\n"
+                        f"[File contents of {attachment.filename}]\n"
                         f"{content}\n"
                         "[End of file]"
                     )
@@ -4561,8 +4561,8 @@ class BotPlatform(ABC):
         text = latest_text.strip()
         if text:
             if len(text) > 600:
-                _marker = "… [preview] "
-                text = _marker + text[-(600 - len(_marker)):]
+                marker = "… [preview] "
+                text = marker + text[-(600 - len(marker)):]
             parts.append(text)
         return "\n\n".join(parts)
 
@@ -4934,12 +4934,12 @@ class BotPlatform(ABC):
                 # cannot bunch behind a delayed dispatch.
                 last_edit = loop.time()
 
-        async def on_event(ev: agent.ChatEvent) -> None:
+        async def on_event(event: agent.ChatEvent) -> None:
             nonlocal latest_text, total_status_lines
             nonlocal pending_status, status_edit_task
-            self._record_turn_event_progress(uid, ev)
+            self._record_turn_event_progress(uid, event)
             if recovering_status is not None:
-                recovering_status.on_event(ev)
+                recovering_status.on_event(event)
                 return
             if not self.supports_transient_status:
                 return
@@ -4951,17 +4951,17 @@ class BotPlatform(ABC):
                 )
             ):
                 return
-            if ev.kind == "text":
-                if ev.content.strip():
-                    latest_text = ev.content
-            elif ev.kind in ("tool", "file"):
-                status_lines.append(_format_status_event_line(ev))
+            if event.kind == "text":
+                if event.content.strip():
+                    latest_text = event.content
+            elif event.kind in ("tool", "file"):
+                status_lines.append(_format_status_event_line(event))
                 total_status_lines += 1
             else:
                 return
             if thinking_handle is None:
                 # No editable status: progress as fresh messages; skip answer text.
-                if ev.kind == "text":
+                if event.kind == "text":
                     return
                 pending_status = status_lines[-1]
             else:
@@ -5204,13 +5204,13 @@ class BotPlatform(ABC):
                 await self.send_file(chat_id, abs_path)
             except asyncio.CancelledError:
                 raise
-            except Exception as e:
+            except Exception as exc:
                 logger.warning(
-                    "Failed to send attachment %s: %s", abs_path, e,
+                    "Failed to send attachment %s: %s", abs_path, exc,
                 )
                 await self._send_text_best_effort(
                     chat_id,
-                    f"Failed to attach {os.path.basename(abs_path)}: {e}",
+                    f"Failed to attach {os.path.basename(abs_path)}: {exc}",
                 )
 
         async def _run() -> None:
@@ -5335,17 +5335,17 @@ class BotPlatform(ABC):
             sent_sources.add(source_path)
             pending_uploads.append(abs_path)
 
-        for ev in result.events:
-            if ev.kind == "attachment":
+        for event in result.events:
+            if event.kind == "attachment":
                 # Explicit generated images can require a large atomic copy.
                 # Keep that I/O off-loop and owned until it physically settles,
                 # so cancellation cannot acknowledge while a copy still writes.
-                await run_owned_worker(collect_attachment, ev.content)
+                await run_owned_worker(collect_attachment, event.content)
                 continue
-            if ev.kind != "text":
+            if event.kind != "text":
                 continue
             text, attach_paths = agent.extract_attachment_sources(
-                ev.content, ws,
+                event.content, ws,
             )
             text, ev_awaiting = agent.extract_await(text)
             if ev_awaiting:
@@ -5475,9 +5475,9 @@ class BotPlatform(ABC):
                         msg_chat_id, "Cancelled.",
                     )
                 break
-            except Exception as e:
+            except Exception as exc:
                 logger.exception("Queued AI chat failed")
-                await self._pause_job_after_failure(uid, entry_id, msg_chat_id, e)
+                await self._pause_job_after_failure(uid, entry_id, msg_chat_id, exc)
                 if self._update_restart_pending or uid in self._paused_jobs:
                     break
             else:

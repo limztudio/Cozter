@@ -81,7 +81,7 @@ class FlexibleLeaseNativeContinuityTests(unittest.IsolatedAsyncioTestCase):
             "HISTORICAL-REQUEST-MARKER", "HISTORICAL-ANSWER-MARKER",
             "SUMMARY-CONTEXT-MARKER", "MEMORY-CONTEXT-MARKER", "COLONY-CONTEXT-MARKER",
         )
-        cases = ((case, approval) for case in native_flexible._CASES for approval in ("full", "confirm"))
+        cases = ((case, approval) for case in native_flexible.CASES for approval in ("full", "confirm"))
         for (module, cls, _model), approval in cases:
             with self.subTest(backend=cls.name, approval=approval):
                 self._select_workers(cls.name)

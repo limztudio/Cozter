@@ -106,23 +106,23 @@ def _load_subpackage(subpackage: str, *, mark_as_plugin: bool) -> None:
     Files starting with ``_`` are skipped, so an example plugin can
     ship in-tree without being live until renamed.
     """
-    pkg_name = f"{__name__}.{subpackage}"
+    package_name = f"{__name__}.{subpackage}"
     try:
-        pkg = importlib.import_module(pkg_name)
+        package = importlib.import_module(package_name)
     except ImportError as exc:
-        logger.warning("Could not import %s: %s", pkg_name, exc)
+        logger.warning("Could not import %s: %s", package_name, exc)
         return
-    for _mod_info in pkgutil.iter_modules(pkg.__path__):
-        if _mod_info.name.startswith("_"):
+    for module_info in pkgutil.iter_modules(package.__path__):
+        if module_info.name.startswith("_"):
             continue
         before = list(AgentTool.registry)
         try:
-            importlib.import_module(f"{pkg_name}.{_mod_info.name}")
+            importlib.import_module(f"{package_name}.{module_info.name}")
         except Exception:
             # May have self-registered: roll back.
             AgentTool.registry[:] = before
             logger.exception(
-                "Failed to load %s.%s", pkg_name, _mod_info.name,
+                "Failed to load %s.%s", package_name, module_info.name,
             )
             continue
         if mark_as_plugin:
@@ -225,13 +225,13 @@ def parse_openai_call(call: dict) -> tuple[str, dict]:
     """
     if not isinstance(call, dict):
         return "", {}
-    fn = call.get("function")
-    if not isinstance(fn, dict):
+    function_payload = call.get("function")
+    if not isinstance(function_payload, dict):
         return "", {}
-    name = fn.get("name")
+    name = function_payload.get("name")
     if not isinstance(name, str):
         name = ""
-    raw = fn.get("arguments")
+    raw = function_payload.get("arguments")
     if isinstance(raw, dict):
         args = raw
     elif isinstance(raw, str) and raw.strip():

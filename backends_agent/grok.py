@@ -270,9 +270,9 @@ class GrokBackend(CachedModelCatalog, Backend):
 # Grok parses .json prompts as ACP blocks; file avoids argv caps.
         prompt_json: str | None = None
         if self.supports_vision and not compaction:
-            _image_paths = attachment_image_paths(prompt, workspace_path)
-            if _image_paths:
-                prompt_json = grok_prompt_json(prompt, _image_paths)
+            image_paths = attachment_image_paths(prompt, workspace_path)
+            if image_paths:
+                prompt_json = grok_prompt_json(prompt, image_paths)
         if prompt_json is not None:
             prompt_path = _write_prompt_file(prompt_json, suffix=".json")
         else:

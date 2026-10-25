@@ -970,28 +970,28 @@ class OpenAIChatBackend(Backend):
 
                     # Batch consecutive reads and whole-tool read-only plugin
                     # opt-ins; writes and undeclared plugins remain barriers.
-                    _batch_names: list[str] = []
-                    _batch_args: list[dict] = []
-                    _batch_skipped: list[bool] = []
+                    batch_names: list[str] = []
+                    batch_args: list[dict] = []
+                    batch_skipped: list[bool] = []
                     for call_name, call_args in validated_calls:
                         call_signature = tools.tool_signature(call_name, call_args)
                         tool_repeat_counts[call_signature] = (
                             tool_repeat_counts.get(call_signature, 0) + 1
                         )
-                        _batch_names.append(call_name)
-                        _batch_args.append(call_args)
-                        _batch_skipped.append(
+                        batch_names.append(call_name)
+                        batch_args.append(call_args)
+                        batch_skipped.append(
                             tool_repeat_counts[call_signature] > tool_repeat_limit,
                         )
 
                     async def run_tool_call(run_index: int, *, checkpoint: bool = True) -> None:
                         # execute_tool owns permissions, status and truncation.
-                        _name = _batch_names[run_index]
+                        tool_name = batch_names[run_index]
                         result = await tools.execute_tool(
-                            _name, _batch_args[run_index], workspace_path, effective_approval,
+                            tool_name, batch_args[run_index], workspace_path, effective_approval,
                             proc.emit,
                         )
-                        _results[run_index] = result
+                        call_results[run_index] = result
                         pending_results[str(run_index)] = result
                         if checkpoint:
                             # A mutation's outcome must be durable before any
@@ -999,24 +999,24 @@ class OpenAIChatBackend(Backend):
                             # share one checkpoint per bounded wave.
                             await save_pending_results()
 
-                    _results: list[str | None] = [None] * len(tool_calls)
+                    call_results: list[str | None] = [None] * len(tool_calls)
                     batch_started = time.monotonic()
                     position = 0
                     while position < len(tool_calls):
-                        if _batch_skipped[position]:
+                        if batch_skipped[position]:
                             position += 1
                             continue
-                        if not _parallel_read_tool(_batch_names[position]):
+                        if not _parallel_read_tool(batch_names[position]):
                             await run_tool_call(position)
                             position += 1
                             continue
                         read_indices: list[int] = []
                         while (
                             position < len(tool_calls)
-                            and _parallel_read_tool(_batch_names[position])
+                            and _parallel_read_tool(batch_names[position])
                             and len(read_indices) < _PARALLEL_READ_TOOLS
                         ):
-                            if not _batch_skipped[position]:
+                            if not batch_skipped[position]:
                                 read_indices.append(position)
                             position += 1
                         # Bounded task creation also bounds filesystem threads.
@@ -1053,12 +1053,12 @@ class OpenAIChatBackend(Backend):
                     performance_logger.info(
                         "stage=tool_batch backend=%s seconds=%.3f calls=%d skipped=%d",
                         self.name, time.monotonic() - batch_started,
-                        len(tool_calls), sum(_batch_skipped),
+                        len(tool_calls), sum(batch_skipped),
                     )
                     batch_results: list[str] = []
-                    for _i, call in enumerate(tool_calls):
-                        name = _batch_names[_i]
-                        if _batch_skipped[_i]:
+                    for call_index, call in enumerate(tool_calls):
+                        name = batch_names[call_index]
+                        if batch_skipped[call_index]:
                             result = (
                                 f"Skipped: {name} repeated"
                                 f" >{tool_repeat_limit}x. Answer"
@@ -1070,7 +1070,7 @@ class OpenAIChatBackend(Backend):
                                 "output": result,
                             })
                         else:
-                            call_result: str | None = _results[_i]
+                            call_result: str | None = call_results[call_index]
                             result_text: str = (
                                 call_result
                                 if isinstance(call_result, str)
@@ -1094,7 +1094,7 @@ class OpenAIChatBackend(Backend):
 
                     # A skipped-only round cannot add evidence. Do not spend
                     # hundreds of completions asking for the same blocked calls.
-                    if all(_batch_skipped):
+                    if all(batch_skipped):
                         stop_reason = "Repeated tool calls made no further progress."
                         break
                     if all(_is_blocked_tool_result(item) for item in batch_results):
@@ -1310,7 +1310,7 @@ class _RetryableError(RuntimeError):
         )
 
 
-class _SSEEventTooLargeError(RuntimeError):
+class _SseEventTooLargeError(RuntimeError):
     """A framed SSE event exceeded the aggregate memory limit."""
 
 
@@ -1657,7 +1657,7 @@ async def _post_completion_stream(
         TimeoutError,
     ) as exc:
         raise _RetryableError(f"{label}: {exc}") from exc
-    except (_SSEEventTooLargeError, _CompletionTooLargeError) as exc:
+    except (_SseEventTooLargeError, _CompletionTooLargeError) as exc:
         if terminal_finish_reason == "content_filter":
             # The filtered terminal delta may itself exceed a buffer cap.
             # Its explicit refusal remains deterministic even in that case.
@@ -1757,7 +1757,7 @@ async def _iter_sse_lines(
     argument delta and accepting a later [DONE] could execute a partial call.
     """
     def line_too_long() -> None:
-        raise _SSEEventTooLargeError(
+        raise _SseEventTooLargeError(
             f"SSE line exceeded {_MAX_SSE_LINE_BYTES} byte limit",
         )
 
@@ -1799,7 +1799,7 @@ async def _iter_sse_events(
         # Newline counts too.
         event_bytes += len(data.encode("utf-8")) + (1 if data_lines else 0)
         if event_bytes > _MAX_SSE_EVENT_BYTES:
-            raise _SSEEventTooLargeError(
+            raise _SseEventTooLargeError(
                 "SSE event exceeded "
                 f"{_MAX_SSE_EVENT_BYTES} byte limit",
             )

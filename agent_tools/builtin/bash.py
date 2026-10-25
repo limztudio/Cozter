@@ -101,10 +101,10 @@ class BashTool(AgentTool):
                 "\n… [output capture stopped after the shell exited while a"
                 " child kept its output pipe open; output may be incomplete]"
             )
-        rc = proc.returncode
-        if rc == 0:
+        returncode = proc.returncode
+        if returncode == 0:
             return output or "(no output)"
-        return f"$ exit {rc}\n{output}"
+        return f"$ exit {returncode}\n{output}"
 
     def summarize(self, args: dict) -> str:
         cmd = args.get("command", "")
@@ -128,9 +128,9 @@ def _find_shell() -> list[str] | None:
             ]
         cmd = shutil.which("cmd.exe") or "cmd.exe"
         return [cmd, "/d", "/c"]
-    sh = shutil.which("bash") or shutil.which("sh")
-    if sh:
-        return [sh, "-c"]
+    shell_path = shutil.which("bash") or shutil.which("sh")
+    if shell_path:
+        return [shell_path, "-c"]
     return None
 
 

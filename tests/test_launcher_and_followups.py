@@ -7,12 +7,12 @@ from unittest import mock
 
 from Cozter import agent, flexible, workspace
 from Cozter.backends_agent.base import AgentResult, append_text_result
-from Cozter.tests.test_runtime_diagnostics import _load_main_module
+from Cozter.tests.test_runtime_diagnostics import load_main_module
 
 
 class LauncherExitTests(unittest.TestCase):
     def test_cli_crash_returns_a_nonzero_exit_status(self):
-        main = _load_main_module()
+        main = load_main_module()
 
         def crash(coro):
             coro.close()
@@ -35,7 +35,7 @@ class LauncherExitTests(unittest.TestCase):
 
 class FollowupCoverageTests(unittest.IsolatedAsyncioTestCase):
     def test_parser_keeps_all_reported_obligations(self):
-        instructions = [f"fix issue {i}" for i in range(flexible.MAX_SUBTASKS + 3)]
+        instructions = [f"fix issue {index}" for index in range(flexible.MAX_SUBTASKS + 3)]
         parsed = flexible.parse_followups("\n".join(
             f"[followup:low] {instruction}" for instruction in instructions
         ))
@@ -64,7 +64,7 @@ class FollowupCoverageTests(unittest.IsolatedAsyncioTestCase):
                 issues = range((len(calls) - 1) * 27, len(calls) * 27)
                 reported.update(issues)
                 text += "\n" + "\n".join(
-                    f"[followup:{flexible.TIERS[i % 3]}] issue {i}" for i in issues
+                    f"[followup:{flexible.TIERS[index % 3]}] issue {index}" for index in issues
                 )
             append_text_result(result, text)
             return result, False

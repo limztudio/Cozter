@@ -49,7 +49,7 @@ class SignalAttachmentWhitespaceTests(unittest.TestCase):
             with self.subTest(payload=repr(payload)), self.assertRaises(binascii.Error):
                 signal._decode_attachment_payload(signal._strip_attachment_whitespace(payload), 100)
 
-    def test_nonascii_nonwhitespace_remains_invalid(self):
+    def test_non_ascii_non_whitespace_remains_invalid(self):
         payload = "YWJj\ud800"
         self.assertEqual(signal._strip_attachment_whitespace(payload), payload)
         with self.assertRaises(ValueError):

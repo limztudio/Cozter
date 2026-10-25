@@ -154,7 +154,7 @@ class SignalStatusRecoveryTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(await self.bot.posted.get(), 1001)
             await on_event(ChatEvent(kind="tool", content="preserved live activity"))
             self.assertEqual(await asyncio.wait_for(self.bot.posted.get(), .5), 1002)
-            self.assertEqual(Counter(ev["editTimestamp"] for ev in self.bot.edits), {1001: 10})
+            self.assertEqual(Counter(event["editTimestamp"] for event in self.bot.edits), {1001: 10})
             self.assertGreaterEqual(self.bot.posts[1][0] - self.bot.posts[0][0], .035)
             await on_event(ChatEvent(kind="tool", content="new handle activity"))
             while (edited := await asyncio.wait_for(self.bot.edited.get(), .2))["editTimestamp"] == 1001:
@@ -169,7 +169,7 @@ class SignalStatusRecoveryTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.sleep(.05)
         self.assertEqual(len(self.bot.posts), 2)
         self.assertCountEqual(self.bot.deletes, [1001, 1002])
-        self.assertEqual(Counter(ev["editTimestamp"] for ev in self.bot.edits), {1001: 10, 1002: 1})
+        self.assertEqual(Counter(event["editTimestamp"] for event in self.bot.edits), {1001: 10, 1002: 1})
 
     async def test_final_or_stop_during_pending_initial_creation_cannot_send_a_late_status(self):
         for cancel in (False, True):

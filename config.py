@@ -422,12 +422,12 @@ def load_config() -> dict:
 
     try:
         cfg = _load_config_object()
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError, RecursionError) as e:
-        print(f"ERROR: config.json is corrupted or unreadable: {e}")
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError, RecursionError) as exc:
+        print(f"ERROR: config.json is corrupted or unreadable: {exc}")
         print(f"Fix or delete {CONFIG_PATH}, then restart.")
         sys.exit(1)
-    except ValueError as e:
-        print(f"ERROR: {e}")
+    except ValueError as exc:
+        print(f"ERROR: {exc}")
         print(f"Fix or delete {CONFIG_PATH}, then restart.")
         sys.exit(1)
 
