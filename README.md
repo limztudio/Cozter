@@ -40,7 +40,7 @@ works across every backend.
   also reviews long operations periodically even when they still emit output.
   These reviews and diagnostic budgets do not limit task runtime.
 
-- **A default meta-agent plus seven direct agent backends**, picked per
+- **A default meta-agent plus eight direct agent backends**, picked per
   workspace:
   - `flexible` (default) — a meta-agent that sizes the work with a cheap
     summary-model call, chooses one persistent completion owner at
@@ -340,6 +340,11 @@ example layout lives in `.config/config.example.json`):
   "meta_max_retries": 2,
 
   "flexible_max_parallel_workers": 3,
+  "hang_check_interval_seconds": 30,
+  "hang_diagnose_after_seconds": 300,
+  "hang_review_interval_seconds": 300,
+  "hang_review_timeout_seconds": 120,
+  "hang_long_running_review_seconds": 1800,
   "update_idle_timeout": 1200,
   "dump_traceback_interval": 0,
   "update_check_interval": 300,
@@ -1939,7 +1944,7 @@ OpenAI-compatible HTTP backends share that fail-closed TTL cache
 their own caches because they store extra per-model metadata or
 workspace-scoped policy catalogs. HTTP catalogs
 also refresh immediately after an endpoint or account change. `/refresh` discards
-catalog caches and probes all seven direct backends concurrently, without changing
+catalog caches and probes all eight direct backends concurrently, without changing
 selected models, schedules, saved sessions, or Flexible tier assignments. A provider
 failure does not prevent the other catalogs from refreshing. HTTP catalog responses
 over 1 MiB use the backend's normal fallback; otherwise Cozter de-duplicates
