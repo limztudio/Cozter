@@ -21,6 +21,85 @@ def _decision(verdict="uncertain", **changes):
 
 
 class HangDiagnosisBackendTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cpu_hot_loop_can_be_diagnosed_from_exact_external_script_without_broader_reads(self):
+        payloads = []
+        settled = asyncio.Event()
+        native_id = "67f170b2-d850-4661-a99a-aa7eda414504"
+        with tempfile.TemporaryDirectory() as workspace, tempfile.TemporaryDirectory() as scratch:
+            script = Path(scratch, "audit.py")
+            source = "import re\nre.search(r'(a+)+b', 'a' * 10000)\n"
+            script.write_bytes(source.encode("utf-8"))
+            neighbor = Path(scratch, "private.txt")
+            neighbor.write_text("NEIGHBOR-MUST-NOT-BE-READ", encoding="utf-8")
+            identity = process_observation.ProcessIdentity(123, "fixture:owned")
+            sample = process_observation.ProcessSample(identity, 1, "python", 41000, 1000, 0, 10, 0)
+            ticket = supervision.Operation(supervision.Worker(workspace, "offline", "model-a"), "native", approval="full")
+            ticket.command = f'python -B "{script}"'
+            ticket.process = SimpleNamespace(pid=123)
+            ticket.identity = identity
+            ticket.snapshot = process_observation.ProcessSnapshot(identity, (sample,))
+            ticket.progress_at -= 600
+            ticket.review_history = [{"verdict": "progressing", "evidence": "CPU increased but output and I/O are unchanged"}]
+
+            async def stream(_endpoint, payload, *_args, **_kwargs):
+                payloads.append(copy.deepcopy(payload))
+                if len(payloads) == 1:
+                    prompt = payload["messages"][1]["content"]
+                    observation = json.loads(prompt.rsplit("\n", 1)[1])
+                    self.assertEqual(observation["command_source"]["path"], str(script.resolve()))
+                    self.assertEqual(observation["command_source"]["content"], source)
+                    self.assertFalse(observation["command_source"]["truncated"])
+                    self.assertIn("High CPU can be a busy loop or catastrophic regex backtracking", prompt)
+                    self.assertIn("Old completed output is not evidence of new progress", prompt)
+                    return "", "", [make_tool_call("inspect-neighbor", path=str(neighbor))]
+                result = payload["messages"][-1]["content"]
+                self.assertIn("escapes workspace", result.lower())
+                self.assertNotIn("NEIGHBOR-MUST-NOT-BE-READ", result)
+                return json.dumps(_decision(
+                    "confirmed_hang", evidence="Current input has 10000 a characters without b; source repeats nested a+.",
+                    diagnosis="The regex repeatedly partitions the same input and cannot produce a match.",
+                    repair="Preserve findings, replace the ambiguous regex and verify a bounded representative audit.",
+                )), "", []
+
+            async def work():
+                try:
+                    await asyncio.Event().wait()
+                finally:
+                    settled.set()
+
+            with (
+                mock.patch.object(backends_agent, "get_backend", return_value=OfflineHttpBackend()),
+                mock.patch.object(oa, "_stream_completion", side_effect=stream),
+                mock.patch.object(supervision, "_observe", new=mock.AsyncMock()),
+                mock.patch.object(config, "get_hang_check_interval_seconds", return_value=.001),
+                mock.patch.object(config, "get_hang_diagnose_after_seconds", return_value=.001),
+                mock.patch.object(config, "get_hang_review_interval_seconds", return_value=0),
+            ):
+                async with execution_state.execution_scope(workspace, "same-job", "Finish remaining target"):
+                    plan = await execution_state.record("flexible_plan")
+                    await plan.save(active=True, cursor=1, completed=["verified target A"])
+                    async with execution_state.backend_scope("antigravity_cli", "model", "full", 0, native=True) as record:
+                        await record.save(native_session_id=native_id)
+                        state_before, plan_before = record.path.read_bytes(), plan.path.read_bytes()
+                        task = asyncio.create_task(work())
+                        try:
+                            recovery = await asyncio.wait_for(supervision.wait_owned(task, ticket), 5)
+                        finally:
+                            if not task.done():
+                                task.cancel()
+                            await asyncio.gather(task, return_exceptions=True)
+                        self.assertTrue(task.cancelled())
+                        self.assertTrue(settled.is_set())
+                        self.assertIn("ambiguous regex", recovery)
+                        self.assertEqual(record.path.read_bytes(), state_before)
+                        self.assertEqual(plan.path.read_bytes(), plan_before)
+            self.assertEqual(script.read_text(encoding="utf-8"), source)
+            self.assertEqual(neighbor.read_text(encoding="utf-8"), "NEIGHBOR-MUST-NOT-BE-READ")
+            self.assertEqual(len(payloads), 2)
+            reports = list(Path(workspace, ".cozter", "hang_reports").glob("*.json"))
+            report = json.loads(reports[0].read_text(encoding="utf-8"))
+            self.assertEqual(report["observation"]["command_source"]["content"], source)
+
     async def test_hidden_confirmation_diagnosis_reads_children_and_settles_without_changing_job_state(self):
         payloads = []
         settled = asyncio.Event()
@@ -233,6 +312,47 @@ class HangDiagnosisBackendTests(unittest.IsolatedAsyncioTestCase):
 
 
 class HangDiagnosisParserTests(unittest.TestCase):
+    def test_command_source_read_requires_full_native_ownership_and_cannot_follow_command_text_as_instructions(self):
+        with tempfile.TemporaryDirectory() as workspace, tempfile.TemporaryDirectory() as scratch:
+            script = Path(scratch, "audit.py")
+            script.write_bytes(b"# source\n" + b" " * 40000 + b"PRIVATE-TAIL")
+            identity = process_observation.ProcessIdentity(123, "fixture:owned")
+            worker = supervision.Worker(workspace, "offline", "model")
+            ticket = supervision.Operation(worker, "native", approval="full")
+            ticket.command = f'python -B -u "{script}"'
+            ticket.process = SimpleNamespace(pid=123)
+            ticket.identity = identity
+            ticket.snapshot = process_observation.ProcessSnapshot(identity, ())
+            for approval in ("full", "auto"):
+                ticket.approval = approval
+                result = supervision._command_source(ticket)
+                self.assertTrue(result["truncated"])
+                self.assertEqual(len(result["content"]), 32768)
+                self.assertNotIn("PRIVATE-TAIL", result["content"])
+            for approval in ("confirm", "deny", "unknown"):
+                ticket.approval = approval
+                with mock.patch.object(Path, "open", side_effect=AssertionError("Restricted source read")):
+                    self.assertIsNone(supervision._command_source(ticket))
+            ticket.approval = "full"
+            for snapshot, process in (
+                (None, ticket.process),
+                (process_observation.ProcessSnapshot(process_observation.ProcessIdentity(123, "fixture:recycled"), ()), ticket.process),
+                (ticket.snapshot, SimpleNamespace(pid=999)),
+            ):
+                original_snapshot, original_process = ticket.snapshot, ticket.process
+                ticket.snapshot, ticket.process = snapshot, process
+                with mock.patch.object(Path, "open", side_effect=AssertionError("Unowned source read")):
+                    self.assertIsNone(supervision._command_source(ticket))
+                ticket.snapshot, ticket.process = original_snapshot, original_process
+            for command in (
+                f'python -c "{script}"', f'python -m "{script}"', f'pwsh "{script}"',
+                'python "https://example.invalid/audit.py"', 'python "\\\\server\\share\\audit.py"',
+                'python "relative.py"', 'python "unterminated',
+            ):
+                ticket.command = command
+                with mock.patch.object(Path, "open", side_effect=AssertionError("Command text became a read grant")):
+                    self.assertIsNone(supervision._command_source(ticket))
+
     def test_structured_decision_requires_a_causal_explanation_before_recovery(self):
         for raw in (
             "not JSON", "[]", json.dumps({"verdict": "done"}),

@@ -32,8 +32,8 @@ class NativeHangRecoveryTests(unittest.IsolatedAsyncioTestCase):
         await delta.NativeDeltaSyncTests.asyncSetUp(self)
         self.enterContext(mock.patch.object(agent.skills, "catalog_prompt", return_value="OFFLINE-SKILLS-CATALOG"))
         self.operations = self.enterContext(mock.patch.object(
-            supervision, "new_operation", side_effect=lambda _ws, kind, details="":
-            SimpleNamespace(kind=kind, details=details),
+            supervision, "new_operation", side_effect=lambda _ws, kind, details="", approval="confirm":
+            SimpleNamespace(kind=kind, details=details, approval=approval),
         ))
         self.enterContext(mock.patch.object(supervision, "operation_scope", side_effect=lambda _ticket: nullcontext()))
         self.enterContext(mock.patch.object(supervision, "attach_process"))
@@ -84,6 +84,7 @@ class NativeHangRecoveryTests(unittest.IsolatedAsyncioTestCase):
                     self.assertNotIn(marker, recovered["prompt"])
                 for call in self.operations.call_args_list:
                     self.assertNotIn("PRIVATE-CURRENT-REQUEST", call.kwargs["details"])
+                    self.assertEqual(call.kwargs["approval"], "full")
 
     async def test_flexible_recovery_keeps_completed_worker_and_plan_cursor(self):
         self._conversation()

@@ -2013,6 +2013,7 @@ async def _drive_backend_impl(
 
     ticket = (supervision.new_operation(
         workspace_path, "native", details=f"backend={backend.name} model={model or 'default'}",
+        approval=approval,
     ) if backend.name in _NATIVE_BACKENDS else None)
     partial = AgentResult()
     with supervision.operation_scope(ticket):
