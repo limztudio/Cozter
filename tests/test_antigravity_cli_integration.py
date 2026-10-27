@@ -404,6 +404,107 @@ class AntigravityNativeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("ANTIGRAVITY-INTERRUPTED-REQUEST-MARKER", resumed["prompt"])
         self.assertNotIn("HISTORICAL-REQUEST-MARKER", resumed["prompt"])
 
+    async def test_restored_owner_delivers_changed_checkpoint_once_and_keeps_original_job_and_native_session(self):
+        sid = self._conversation()
+        original = "OWNER-ORIGINAL-SCOPE-MARKER: finish all requested targets"
+        first_request = original + "\n\nInitial checkpoint: CHECKPOINT-ONE-MARKER"
+        changed_request = original + "\n\nRecovery guidance: REPAIR-GUIDANCE-MARKER\nCheckpoint: CHECKPOINT-TWO-MARKER"
+        job = "owner-resume-context"
+
+        async def run(request, execution_id=job):
+            return await agent.run(
+                request, self.ws, 7, model="unused-flexible-model", approval="full",
+                backend_name="flexible", summary_backend_name="codex", summary_model="offline-summary",
+                session_id=sid, execution_id=execution_id, original_request=original,
+            )
+
+        async def interrupt(request):
+            self.receipt_ready.clear()
+            self.hold_after_activity = True
+            task = asyncio.create_task(run(request))
+            try:
+                await asyncio.wait_for(self.receipt_ready.wait(), 5)
+                launch = self.launches[-1]
+            finally:
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+                await agent._wait_for_pending_session_writes(self.ws)
+            async with execution_state.execution_scope(self.ws, job, original):
+                saved = await execution_state.record("flexible_plan")
+                self.assertTrue(saved.get("active"))
+                self.assertEqual(saved.get("cursor"), 0)
+                self.assertEqual(saved.get("owner_request"), first_request)
+            return launch
+
+        first = await interrupt(first_request)
+        changed = await interrupt(changed_request)
+        self.assertEqual(changed["native_id"], first["native_id"])
+        self.assertEqual(changed["prompt"].count("REPAIR-GUIDANCE-MARKER"), 1)
+        self.assertEqual(changed["prompt"].count("CHECKPOINT-TWO-MARKER"), 1)
+        for marker in ("OWNER-ORIGINAL-SCOPE-MARKER", "CHECKPOINT-ONE-MARKER", "HISTORICAL-REQUEST-MARKER"):
+            self.assertNotIn(marker, changed["prompt"])
+
+        repeated = await interrupt(changed_request)
+        self.assertEqual(repeated["native_id"], first["native_id"])
+        for marker in ("REPAIR-GUIDANCE-MARKER", "CHECKPOINT-TWO-MARKER", "OWNER-ORIGINAL-SCOPE-MARKER"):
+            self.assertNotIn(marker, repeated["prompt"])
+        self.assertIn("Continue the current job from this native conversation", repeated["prompt"])
+        self.assertEqual(len(self.planner_prompts), 1)
+
+        self.hold_after_activity = False
+        final_request = original + "\n\nUpdated recovery: NEW-REPAIR-MARKER\nCheckpoint: CHECKPOINT-THREE-MARKER"
+        completed = await run(final_request)
+        self.assertFalse(completed.error)
+        final = self.launches[-1]
+        self.assertEqual(final["native_id"], first["native_id"])
+        self.assertEqual(final["prompt"].count("NEW-REPAIR-MARKER"), 1)
+        self.assertNotIn("REPAIR-GUIDANCE-MARKER", final["prompt"])
+        self.assertEqual(len(self.planner_prompts), 1)
+
+        new_job = await run(final_request, "another-owner-resume-context-job")
+        self.assertFalse(new_job.error)
+        self.assertEqual(self.launches[-1]["native_id"], first["native_id"])
+        self.assertIn("OWNER-ORIGINAL-SCOPE-MARKER", self.launches[-1]["prompt"])
+        self.assertIn("NEW-REPAIR-MARKER", self.launches[-1]["prompt"])
+        self.assertEqual(len(self.planner_prompts), 2)
+
+    async def test_folded_accepted_guidance_keeps_owner_and_delivers_later_checkpoint_delta(self):
+        sid = self._conversation()
+        original = "FOLDED-OWNER-ORIGINAL-MARKER"
+        guidance = "ACCEPTED-OWNER-GUIDANCE-MARKER"
+        folded = original + "\n\n[Added while working]:\n" + guidance
+        job = "folded-owner-resume-context"
+
+        async def invoke(request, canonical, injected):
+            async with execution_state.execution_scope(self.ws, job, canonical):
+                execution_state.bind_conversation(sid)
+                return await agent._run_flexible(
+                    request, request, self.ws, approval="full", effort=0, collaborative=False,
+                    summary_backend_name="codex", summary_model="offline-summary", on_event=None,
+                    inject_queue=None, injected=injected, session_data=session.load_session(self.ws, sid),
+                )
+
+        self.hold_after_activity = True
+        task = asyncio.create_task(invoke(folded, original, [guidance]))
+        try:
+            await asyncio.wait_for(self.receipt_ready.wait(), 5)
+            first = self.launches[-1]
+        finally:
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+        self.hold_after_activity = False
+        result, restarting = await invoke(folded + "\n\nFRESH-FOLDED-CHECKPOINT-MARKER", folded, [])
+        self.assertFalse(restarting)
+        self.assertFalse(result.error)
+        resumed = self.launches[-1]
+        self.assertEqual(resumed["native_id"], first["native_id"])
+        self.assertEqual(resumed["prompt"].count("FRESH-FOLDED-CHECKPOINT-MARKER"), 1)
+        self.assertNotIn(guidance, resumed["prompt"])
+        self.assertNotIn(original, resumed["prompt"])
+        self.assertEqual(len(self.planner_prompts), 1)
+
     async def test_error_before_acceptance_keeps_unprocessed_history_for_explicit_retry(self):
         sid = self._conversation()
         self.next_failure = {"error": "Authentication required"}

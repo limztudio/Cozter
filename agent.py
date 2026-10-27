@@ -1819,6 +1819,7 @@ async def _drive_backend(
     native_context: native_prompt.NativePrompt | None = None,
     native_worker: str | None = None,
     http_worker_instructions: str | None = None,
+    native_logged_request: str | None = None,
 ) -> tuple[AgentResult, bool]:
     async with execution_state.backend_scope(
         backend.name, model or getattr(backend, "default_model", None), approval, effort,
@@ -1941,6 +1942,8 @@ async def _drive_backend(
                 execution = execution_state.current_execution()
                 if execution is not None and delivered_request is not None:
                     execution.remember_native_request(state, delivered_request)
+                    if native_logged_request is not None:
+                        execution.remember_native_request(state, native_logged_request)
 
             try:
                 return await _drive_backend_impl(
@@ -2653,6 +2656,8 @@ async def _run_flexible(
 
     # A durable cursor is authoritative across allowance boundaries. Resume
     # the pending worker without another planner or replaying completed work.
+    resume_context = ""
+    resumed_owner_request = None
     if restored:
         assert restored_tasks is not None and saved_plan is not None
         if not injected:
@@ -2670,6 +2675,14 @@ async def _run_flexible(
             owner_request = saved_plan.get("owner_request")
             if not isinstance(owner_request, str) or not owner_request.strip():
                 raise ValueError("Saved Flexible owner request is invalid")
+            if request != owner_request:
+                resumed_owner_request = request
+                resume_context = request
+                if request.startswith(owner_request):
+                    resume_context = request[len(owner_request):]
+                elif (original_request and owner_request.startswith(original_request)
+                      and request.startswith(original_request)):
+                    resume_context = request[len(original_request):]
             request = owner_request
         previous_draft = saved_plan.get("phase_previous_draft")
         await status(f"flexible: resuming saved plan at {cursor + 1}/{len(restored_tasks)}")
@@ -3013,6 +3026,12 @@ async def _run_flexible(
         worker_sections = flexible.build_subtask_sections(
             request, plan, index, earlier, previous_draft=previous_draft,
         )
+        if resume_context:
+            worker_sections["resume_context"] = (
+                "\nCurrent continuation instructions and checkpoint for this same unfinished job."
+                " Apply these updates while preserving the original scope and completed work:\n"
+                + resume_context
+            )
         http_worker_instructions = None
         if backend.name not in _NATIVE_BACKENDS:
             http_worker_instructions = worker_sections["worker_instructions"]
@@ -3106,6 +3125,8 @@ async def _run_flexible(
                 )
             })
             prompt_sections["parent_scope"] = f"\nContinue parent task: {task.instruction}"
+            if resume_context:
+                prompt_sections["resume_context"] = worker_sections["resume_context"]
         bootstrap_prompt = _build_backend_prompt(
             backend, "\n".join(worker_sections.values()), collaborative=False,
             allow_detached_requests=False, skills_catalog=native_skills_catalog,
@@ -3131,6 +3152,7 @@ async def _run_flexible(
                 native_worker=((f"flexible:reader:{index}" if task.read_only else "main")
                                if worker_context is not None else None),
                 http_worker_instructions=http_worker_instructions if http_resume else None,
+                native_logged_request=resumed_owner_request,
             ), "flexible_worker", backend_name, model,
                 worker_index=index + 1, worker_count=total, worker_tier=task.tier)
         if sub_result.continuation_reason == "prerequisite":
