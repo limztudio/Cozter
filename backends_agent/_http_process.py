@@ -86,7 +86,7 @@ class HttpAgentProcess:
                 self.emit({"type": "error", "message": str(exc)})
                 self.returncode = 1
             except Exception as exc:
-                # Unexpected type = bug: keep traceback.
+                # Keep traceback for the unexpected loop failure.
                 logger.exception("%s loop crashed", self._label)
                 self.emit({"type": "error", "message": str(exc)})
                 self.returncode = 1
