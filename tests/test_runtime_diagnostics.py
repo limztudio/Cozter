@@ -50,16 +50,16 @@ def load_main_module():
 class _StubBot:
     """Minimal stand-in for the per-platform turn-tracking surface."""
 
-    def __init__(self, platform_id: str, *, active: bool, diag: str = ""):
+    def __init__(self, platform_id: str, *, active: bool, diagnostics: str = ""):
         self.platform_id = platform_id
         self._active = active
-        self._diag = diag
+        self._diagnostics = diagnostics
 
     def has_active_turns(self) -> bool:
         return self._active
 
     def stuck_turn_diagnostics(self) -> str:
-        return self._diag
+        return self._diagnostics
 
 
 class VenvBootstrapTests(unittest.TestCase):
@@ -281,7 +281,7 @@ class DumpRuntimeDiagnosticsTests(unittest.TestCase):
         self.assertIn("--- thread MainThread", body)
 
     def test_dump_records_per_bot_turn_state(self):
-        bot_active = _StubBot("test:active", active=True, diag="LEAKED")
+        bot_active = _StubBot("test:active", active=True, diagnostics="LEAKED")
         bot_idle = _StubBot("test:idle", active=False)
 
         self._main.dump_runtime_diagnostics([bot_active, bot_idle])
@@ -337,7 +337,7 @@ class DumpRuntimeDiagnosticsTests(unittest.TestCase):
         self.assertIn("unit-test-boom", body)
 
     def test_update_idle_diagnostic_keeps_waiting_for_active_turn(self):
-        bot = _StubBot("test:active", active=True, diag="still-running")
+        bot = _StubBot("test:active", active=True, diagnostics="still-running")
         reasons: list[str] = []
         sleeps = 0
 

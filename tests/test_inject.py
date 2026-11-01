@@ -129,13 +129,13 @@ class InjectAckBoundTests(unittest.IsolatedAsyncioTestCase):
 
         class _SlowAckBot(_InjectRaceBot):
             async def send_text(
-                self, _chat_id: str, text: str, *, rich: bool = False,
+                self, chat_id: str, text: str, *, rich: bool = False,
             ):
                 if text == "Injected.":
                     await asyncio.sleep(60)
                     return None
                 return await super().send_text(
-                    _chat_id, text, rich=rich,
+                    chat_id, text, rich=rich,
                 )
 
         async def waiting_run(*_args, **kwargs) -> AgentResult:

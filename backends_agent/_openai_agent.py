@@ -1504,10 +1504,10 @@ async def _post_completion_stream(
         async with session.post(
             endpoint, json=payload, headers=headers or None,
             timeout=timeout,
-        ) as resp:
+        ) as response:
             body = ""
-            if resp.status != 200:
-                body = await _read_error_body(resp)
+            if response.status != 200:
+                body = await _read_error_body(response)
                 try:
                     body_object = json.loads(body)
                 except (ValueError, TypeError):
@@ -1515,38 +1515,38 @@ async def _post_completion_stream(
                 if isinstance(body_object, dict):
                     limit_error = context_error(
                         body_object.get("error"),
-                        f"{label} returned HTTP {resp.status}: {clip_status_value(body, 500)}",
+                        f"{label} returned HTTP {response.status}: {clip_status_value(body, 500)}",
                     )
                     if limit_error is not None:
                         raise limit_error
-            if resp.status == 429 or resp.status >= 500:
+            if response.status == 429 or response.status >= 500:
                 clipped = clip_status_value(body, 200)
                 raise _RetryableError(
-                    f"{label} returned HTTP {resp.status}: {clipped}",
+                    f"{label} returned HTTP {response.status}: {clipped}",
                     retry_after=_parse_retry_after(
-                        resp.headers.get("Retry-After"),
+                        response.headers.get("Retry-After"),
                     ),
                 )
-            if resp.status != 200:
+            if response.status != 200:
                 clipped = clip_status_value(body, 500)
                 raise RuntimeError(
-                    f"{label} returned HTTP {resp.status}: {clipped}"
+                    f"{label} returned HTTP {response.status}: {clipped}"
                 )
-            async for raw_data in _iter_sse_events(resp.content):
+            async for raw_data in _iter_sse_events(response.content):
                 data = raw_data.strip()
                 if data == "[DONE]":
                     saw_terminal_marker = True
                     break
                 try:
-                    obj = json.loads(data)
+                    event_data = json.loads(data)
                 except json.JSONDecodeError:
                     logger.debug("Non-JSON SSE line: %r", data)
                     continue
                 # Ignore malformed events; still surface explicit errors.
-                if not isinstance(obj, dict):
+                if not isinstance(event_data, dict):
                     continue
-                if "error" in obj:
-                    error = obj["error"]
+                if "error" in event_data:
+                    error = event_data["error"]
                     message = (
                         error.get("message")
                         if isinstance(error, dict) else error
@@ -1562,7 +1562,7 @@ async def _post_completion_stream(
                     raise RuntimeError(
                         f"{label} stream error: {clipped_message}"
                     )
-                choices = obj.get("choices")
+                choices = event_data.get("choices")
                 if not isinstance(choices, list) or not choices:
                     continue
                 choice = choices[0]
@@ -1592,7 +1592,7 @@ async def _post_completion_stream(
                 delta = choice.get("delta")
                 if not isinstance(delta, dict):
                     if terminal_event:
-                        await _drain_completion_tail(resp)
+                        await _drain_completion_tail(response)
                         break
                     continue
                 if first_delta is None and any(
@@ -1644,7 +1644,7 @@ async def _post_completion_stream(
                                     supervision.note_output(arguments_delta)
                 # Choice finished: keep its final delta; never retry a stalled tail.
                 if terminal_event:
-                    await _drain_completion_tail(resp)
+                    await _drain_completion_tail(response)
                     break
             if saw_terminal_marker and not (
                 terminal_finish_reason in {"length", "content_filter"} and tool_buffers
@@ -1695,20 +1695,20 @@ async def _post_completion_stream(
         )
 
     tool_calls: list[dict] = []
-    for idx in sorted(tool_buffers.keys()):
-        buf = tool_buffers[idx]
-        function = buf.get("function")
+    for call_index in sorted(tool_buffers.keys()):
+        call_buffer = tool_buffers[call_index]
+        function = call_buffer.get("function")
         if not isinstance(function, dict) or not function.get("name"):
             raise _RetryableError("Malformed generated tool call: missing function name")
-        argument_parts = buf.pop("_argument_parts", [])
-        buf.pop("_argument_bytes", None)
+        argument_parts = call_buffer.pop("_argument_parts", [])
+        call_buffer.pop("_argument_bytes", None)
         if isinstance(argument_parts, list):
             function["arguments"] = "".join(argument_parts)
-        tool_calls.append(buf)
+        tool_calls.append(call_buffer)
     return "".join(text_parts), "".join(reasoning_parts), tool_calls
 
 
-async def _drain_completion_tail(resp: aiohttp.ClientResponse) -> None:
+async def _drain_completion_tail(response: aiohttp.ClientResponse) -> None:
     """Keep normal completed responses reusable without waiting on stalled tails.
 
     Finishing the small [DONE]/usage trailer permits connection reuse. The
@@ -1718,7 +1718,7 @@ async def _drain_completion_tail(resp: aiohttp.ClientResponse) -> None:
     async def drain() -> None:
         remaining = _COMPLETION_TAIL_DRAIN_BYTES
         while remaining > 0:
-            chunk = await resp.content.read(remaining)
+            chunk = await response.content.read(remaining)
             if not chunk:
                 return
             remaining -= len(chunk)
@@ -1730,8 +1730,8 @@ async def _drain_completion_tail(resp: aiohttp.ClientResponse) -> None:
         pass
 
 
-async def _read_error_body(resp: aiohttp.ClientResponse) -> str:
-    """Read a bounded, best-effort error-body preview from *resp*.
+async def _read_error_body(response: aiohttp.ClientResponse) -> str:
+    """Read a bounded, best-effort error-body preview from *response*.
 
     The user-facing error format only includes at most 500 characters, but
     ``ClientResponse.text()`` first reads the entire payload.  A reverse
@@ -1739,8 +1739,8 @@ async def _read_error_body(resp: aiohttp.ClientResponse) -> str:
     response, so cap the raw read before decoding it.  A malformed declared
     charset should not hide the useful HTTP status either.
     """
-    body = await resp.content.read(_MAX_HTTP_ERROR_BODY_BYTES)
-    encoding = getattr(resp, "charset", None) or "utf-8"
+    body = await response.content.read(_MAX_HTTP_ERROR_BODY_BYTES)
+    encoding = getattr(response, "charset", None) or "utf-8"
     try:
         return body.decode(encoding, errors="replace")
     except (LookupError, TypeError):
@@ -1821,8 +1821,8 @@ def _merge_tool_call(
     if not isinstance(delta, dict):
         return 0
 
-    idx = delta.get("index", 0)
-    if isinstance(idx, bool) or not isinstance(idx, int) or idx < 0:
+    call_index = delta.get("index", 0)
+    if isinstance(call_index, bool) or not isinstance(call_index, int) or call_index < 0:
         return 0
 
     function_delta = delta.get("function")
@@ -1831,21 +1831,21 @@ def _merge_tool_call(
         return 0
 
     # Pre-seed an id; the real id overrides.
-    buf = buffers.get(idx)
-    if buf is None:
+    call_buffer = buffers.get(call_index)
+    if call_buffer is None:
         if len(buffers) >= _MAX_TOOL_CALLS_PER_COMPLETION:
             raise _CompletionTooLargeError(
                 "completion exceeded "
                 f"{_MAX_TOOL_CALLS_PER_COMPLETION} tool calls",
             )
-        buf = {
-            "id": f"call_{idx}_{uuid.uuid4().hex[:8]}",
+        call_buffer = {
+            "id": f"call_{call_index}_{uuid.uuid4().hex[:8]}",
             "type": "function",
             "function": {"name": "", "arguments": ""},
             "_argument_parts": [],
             "_argument_bytes": 0,
         }
-        buffers[idx] = buf
+        buffers[call_index] = call_buffer
     call_id = delta.get("id")
     if isinstance(call_id, str) and call_id:
         if len(call_id) > _MAX_TOOL_CALL_ID_CHARS:
@@ -1853,7 +1853,7 @@ def _merge_tool_call(
                 "tool-call id exceeded "
                 f"{_MAX_TOOL_CALL_ID_CHARS} character limit",
             )
-        buf["id"] = call_id
+        call_buffer["id"] = call_id
     if function_delta is None:
         return 0
 
@@ -1864,13 +1864,13 @@ def _merge_tool_call(
                 "tool-call name exceeded "
                 f"{_MAX_TOOL_NAME_CHARS} character limit",
             )
-        buf["function"]["name"] = name
+        call_buffer["function"]["name"] = name
     raw_arguments = function_delta.get("arguments")
-    argument_parts = buf.get("_argument_parts")
+    argument_parts = call_buffer.get("_argument_parts")
     if not isinstance(argument_parts, list):
         argument_parts = []
-        buf["_argument_parts"] = argument_parts
-    previous_bytes = buf.get("_argument_bytes", 0)
+        call_buffer["_argument_parts"] = argument_parts
+    previous_bytes = call_buffer.get("_argument_bytes", 0)
     if not isinstance(previous_bytes, int):
         previous_bytes = 0
     if isinstance(raw_arguments, str):
@@ -1882,7 +1882,7 @@ def _merge_tool_call(
                 f"{_MAX_TOOL_ARGUMENT_BYTES} byte limit",
             )
         argument_parts.append(raw_arguments)
-        buf["_argument_bytes"] = next_bytes
+        call_buffer["_argument_bytes"] = next_bytes
         return fragment_bytes
     if isinstance(raw_arguments, dict):
         try:
@@ -1896,8 +1896,8 @@ def _merge_tool_call(
                 "tool-call arguments exceeded "
                 f"{_MAX_TOOL_ARGUMENT_BYTES} byte limit",
             )
-        buf["_argument_parts"] = [serialized]
-        buf["_argument_bytes"] = serialized_bytes
+        call_buffer["_argument_parts"] = [serialized]
+        call_buffer["_argument_bytes"] = serialized_bytes
         return serialized_bytes - previous_bytes
     return 0
 

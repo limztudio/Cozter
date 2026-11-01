@@ -1015,14 +1015,14 @@ class OpenAIParallelToolTests(unittest.TestCase):
         _run_tool_fixture(stream, execute_tool)
 
         self.assertGreaterEqual(peak, 2)
-        tool_msgs = [
+        tool_messages = [
             msg for msg in payloads[1]["messages"] if msg.get("role") == "tool"
         ]
         self.assertEqual(
-            [msg.get("tool_call_id") for msg in tool_msgs], ["c1", "c2"],
+            [msg.get("tool_call_id") for msg in tool_messages], ["c1", "c2"],
         )
         self.assertEqual(
-            [msg.get("content") for msg in tool_msgs],
+            [msg.get("content") for msg in tool_messages],
             ["a.txt ok", "b.txt ok"],
         )
 
@@ -1051,11 +1051,11 @@ class OpenAIParallelToolTests(unittest.TestCase):
 
         # Repeat limit 3: the 4th identical call is skipped.
         self.assertEqual(ran, 3)
-        tool_msgs = [
+        tool_messages = [
             msg for msg in payloads[1]["messages"] if msg.get("role") == "tool"
         ]
-        self.assertEqual(len(tool_msgs), 4)
-        self.assertIn("Skipped", tool_msgs[3].get("content", ""))
+        self.assertEqual(len(tool_messages), 4)
+        self.assertIn("Skipped", tool_messages[3].get("content", ""))
 
 
 class OpenAIToolPermissionTests(unittest.TestCase):

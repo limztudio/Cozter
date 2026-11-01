@@ -6,11 +6,11 @@ import unittest
 from unittest import mock
 
 from Cozter.agent_tools.base import (
-    NonPublicAddressError as _NonPublicAddressError,
+    NonPublicAddressError,
     html_to_text,
-    validate_public_url as _validate_public_url,
+    validate_public_url,
 )
-from Cozter.agent_tools._public_resolver import PublicResolver as _PublicResolver
+from Cozter.agent_tools._public_resolver import PublicResolver
 from Cozter.agent_tools.builtin.web_fetch import WebFetchTool
 from Cozter.tests.helpers import BytesContent
 
@@ -31,7 +31,7 @@ class _StaticResolver:
         self.closed = True
 
 
-class _Response:
+class _WebFetchResponse:
     charset = "utf-8"
 
     def __init__(
@@ -47,7 +47,7 @@ class _Response:
         self.headers = headers
         self.content = BytesContent(body)
 
-    async def __aenter__(self) -> _Response:
+    async def __aenter__(self) -> _WebFetchResponse:
         return self
 
     async def __aexit__(
@@ -60,11 +60,11 @@ class _Response:
 
 
 class _ResponseSession:
-    def __init__(self, responses: list[_Response]) -> None:
+    def __init__(self, responses: list[_WebFetchResponse]) -> None:
         self.responses = responses
         self.requests: list[tuple[str, dict[str, object]]] = []
 
-    def get(self, url: str, **kwargs: object) -> _Response:
+    def get(self, url: str, **kwargs: object) -> _WebFetchResponse:
         self.requests.append((url, kwargs))
         return self.responses.pop(0)
 
@@ -84,19 +84,19 @@ class WebFetchSecurityTests(unittest.TestCase):
         for url in blocked_urls:
             with self.subTest(url=url):
                 self.assertEqual(
-                    _validate_public_url(url),
+                    validate_public_url(url),
                     "Error: URL host must be a publicly routable address",
                 )
 
         self.assertEqual(
-            _validate_public_url("https://user:secret@example.com/"),
+            validate_public_url("https://user:secret@example.com/"),
             "Error: URL credentials are not allowed",
         )
         self.assertEqual(
-            _validate_public_url("https:///missing-host"),
+            validate_public_url("https:///missing-host"),
             "Error: invalid URL host",
         )
-        self.assertIsNone(_validate_public_url("https://example.com/"))
+        self.assertIsNone(validate_public_url("https://example.com/"))
 
     def test_dns_results_must_all_be_public(self) -> None:
         async def run() -> None:
@@ -108,9 +108,9 @@ class WebFetchSecurityTests(unittest.TestCase):
                 "Cozter.agent_tools._public_resolver.DefaultResolver",
                 return_value=delegate,
             ):
-                resolver = _PublicResolver()
+                resolver = PublicResolver()
 
-            with self.assertRaises(_NonPublicAddressError):
+            with self.assertRaises(NonPublicAddressError):
                 await resolver.resolve("mixed.example", 443)
             self.assertEqual(delegate.calls[0][:2], ("mixed.example", 443))
 
@@ -122,7 +122,7 @@ class WebFetchSecurityTests(unittest.TestCase):
     def test_redirect_to_private_target_is_not_requested(self) -> None:
         async def run() -> str:
             session = _ResponseSession([
-                _Response(
+                _WebFetchResponse(
                     status=302,
                     url="https://public.example/start",
                     headers={"location": "http://127.0.0.1/admin"},
@@ -165,7 +165,7 @@ class WebFetchContentTypeTests(unittest.TestCase):
     def test_capped_html_keeps_the_marker_when_truncated_in_hidden_content(self) -> None:
         async def run(tag: str) -> str:
             session = _ResponseSession([
-                _Response(
+                _WebFetchResponse(
                     status=200,
                     url="https://public.example/document",
                     headers={"content-type": "text/html"},
@@ -198,7 +198,7 @@ class WebFetchContentTypeTests(unittest.TestCase):
     def test_case_insensitive_textual_content_types_are_readable(self) -> None:
         async def run(content_type: str) -> str:
             session = _ResponseSession([
-                _Response(
+                _WebFetchResponse(
                     status=200,
                     url="https://public.example/document",
                     headers={"content-type": content_type},

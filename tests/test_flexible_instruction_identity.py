@@ -40,10 +40,10 @@ class FlexibleInstructionIdentityTests(unittest.TestCase):
                 self.assertEqual(flexible.instruction_identity(text), legacy_identity(text), repr(text))
 
     def test_seeded_longer_mixed_quotes_and_unicode_whitespace_match_legacy(self):
-        rng = random.Random(92701)
+        generator = random.Random(92701)
         alphabet = "'\"`\\ abc\n\r\t\u2003\u2028"
         for index in range(2_000):
-            text = "".join(rng.choices(alphabet, k=rng.randrange(150)))
+            text = "".join(generator.choices(alphabet, k=generator.randrange(150)))
             if index % 8 == 0:
                 text = "Please " + text
             self.assertEqual(flexible.instruction_identity(text), legacy_identity(text), repr(text))

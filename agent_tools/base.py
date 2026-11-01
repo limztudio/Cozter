@@ -409,9 +409,9 @@ def path_replacement_parameters() -> dict[str, Any]:
     )
 
 
-def no_clobber_result(raw_dst: str) -> str:
+def no_clobber_result(raw_destination: str) -> str:
     """Shared no-clobber refusal for the copy/move transfer tools."""
-    return f"Destination already exists: {raw_dst}"
+    return f"Destination already exists: {raw_destination}"
 
 
 def resolve_tool_path(
@@ -440,25 +440,25 @@ def prepare_source_destination(
     preserve_final_symlinks: bool = False,
 ) -> tuple[str, str, str, str] | str:
     """Return validated transfer paths or a model-facing preflight error."""
-    raw_src = args.get("source", "")
-    raw_dst = args.get("destination", "")
+    raw_source = args.get("source", "")
+    raw_destination = args.get("destination", "")
     resolver = (
         resolve_workspace_entry
         if preserve_final_symlinks else resolve_inside_workspace
     )
     try:
-        src = resolver(workspace, raw_src)
-        dst = resolver(workspace, raw_dst)
+        source_path = resolver(workspace, raw_source)
+        destination_path = resolver(workspace, raw_destination)
     except (ValueError, OSError) as exc:
         return f"Error: {exc}"
     exists = os.path.lexists if preserve_final_symlinks else os.path.exists
-    if not exists(src):
-        return f"Source not found: {raw_src}"
-    if file_action is not None and not os.path.isfile(src):
-        return f"Not a file (refusing to {file_action}): {raw_src}"
-    if exists(dst):
-        return no_clobber_result(raw_dst)
-    return raw_src, raw_dst, src, dst
+    if not exists(source_path):
+        return f"Source not found: {raw_source}"
+    if file_action is not None and not os.path.isfile(source_path):
+        return f"Not a file (refusing to {file_action}): {raw_source}"
+    if exists(destination_path):
+        return no_clobber_result(raw_destination)
+    return raw_source, raw_destination, source_path, destination_path
 
 
 def summarize_path(action: str, args: dict, default: str = "?") -> str:

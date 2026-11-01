@@ -493,10 +493,10 @@ def _new_file_ends_with_newline(hunks: list[_Hunk], *, default: bool) -> bool:
 def _apply_hunks(lines: list[str], hunks: list[_Hunk]) -> list[str] | str:
     result = list(lines)
     line_offset = 0
-    for idx, hunk in enumerate(hunks, 1):
+    for hunk_number, hunk in enumerate(hunks, 1):
         pos = _locate(result, hunk, line_offset=line_offset)
         if pos is None:
-            return f"hunk {idx} did not apply (context not found)"
+            return f"hunk {hunk_number} did not apply (context not found)"
         result[pos:pos + len(hunk.old)] = hunk.new
         line_offset += len(hunk.new) - len(hunk.old)
     return result

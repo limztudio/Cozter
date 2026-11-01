@@ -946,10 +946,10 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
         statuses: list[str] = []
 
         async def followup_worker(
-            _backend, _ws, _prompt, _model, _approval, **kwargs,
+            _backend, _ws, _prompt, model, _approval, **kwargs,
         ):
             call_index = len(calls)
-            calls.append(_model)
+            calls.append(model)
             if call_index == 0:
                 return _worker(
                     "first done\n[followup:mid] handle leftover",
@@ -1453,7 +1453,7 @@ class JudgeLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(verdict.should_continue)
 
     async def _run_judge_turn(
-        self, prompt: str, drive_fn, judge_fn,
+        self, prompt: str, drive_func, judge_func,
     ) -> AgentResult:
         with tempfile.TemporaryDirectory() as ws:
             from Cozter import session
@@ -1472,8 +1472,8 @@ class JudgeLoopTests(unittest.IsolatedAsyncioTestCase):
                 mock.patch.object(
                     agent.backends_agent, "get_backend", return_value=backend,
                 ),
-                mock.patch.object(agent, "_drive_backend", drive_fn),
-                mock.patch.object(agent, "_judge_draft", judge_fn),
+                mock.patch.object(agent, "_drive_backend", drive_func),
+                mock.patch.object(agent, "_judge_draft", judge_func),
                 mock.patch.object(
                     agent.compaction, "maybe_compact",
                     new_callable=mock.AsyncMock,
@@ -1497,8 +1497,8 @@ class JudgeLoopTests(unittest.IsolatedAsyncioTestCase):
             calls["drive"] += 1
             return AgentResult(text=text), False
 
-        async def fake_judge(*_args, **_kwargs):
-            round_no = _kwargs.get("round_no", 1)
+        async def fake_judge(*_args, **kwargs):
+            round_no = kwargs.get("round_no", 1)
             if round_no == 1:
                 return flexible.JudgeVerdict(
                     should_continue=True,

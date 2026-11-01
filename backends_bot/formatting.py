@@ -8,7 +8,7 @@ from collections.abc import Callable, Iterator
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 _INLINE_CODE_RE = re.compile(r"`([^`]+?)`")
-_FENCE_OPEN_RE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
+FENCE_OPEN_RE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
 _HEADING_RE = re.compile(r"^#{1,6}\s+(.+)$")
 _BOLD_STAR_RE = re.compile(r"\*\*(.+?)\*\*")
 _BOLD_UNDER_RE = re.compile(r"__(.+?)__")
@@ -108,7 +108,7 @@ def iter_fenced_markdown(
                 code_lines.append(source_line)
             continue
 
-        opener = _FENCE_OPEN_RE.match(source_line)
+        opener = FENCE_OPEN_RE.match(source_line)
         if opener is not None and not (
             opener.group(1)[0] == "`" and "`" in opener.group(2)
         ):

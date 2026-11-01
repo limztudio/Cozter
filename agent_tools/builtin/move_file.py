@@ -31,23 +31,23 @@ class MoveFileTool(AgentTool):
         )
         if isinstance(paths, str):
             return paths
-        raw_src, raw_dst, src, dst = paths
+        raw_source, raw_destination, source_path, destination_path = paths
         if (
-            not os.path.islink(src)
-            and os.path.isdir(src)
-            and is_path_within(dst, src)
+            not os.path.islink(source_path)
+            and os.path.isdir(source_path)
+            and is_path_within(destination_path, source_path)
         ):
             return (
                 "Error: destination cannot be inside the source directory: "
-                f"{raw_dst}"
+                f"{raw_destination}"
             )
         try:
-            ensure_parent_dir(dst)
-            if not move_path_no_clobber(src, dst):
-                return no_clobber_result(raw_dst)
+            ensure_parent_dir(destination_path)
+            if not move_path_no_clobber(source_path, destination_path):
+                return no_clobber_result(raw_destination)
         except OSError as exc:
             return f"Move failed: {exc}"
-        return f"Moved: {raw_src} -> {raw_dst}"
+        return f"Moved: {raw_source} -> {raw_destination}"
 
     def summarize(self, args: dict) -> str:
         return summarize_path_pair("move_file", args)

@@ -562,7 +562,7 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
             with open(attachments[1].local_path, "rb") as file_handle:
                 self.assertEqual(file_handle.read(), b"https://files.example/second")
 
-        self.assertEqual([att.filename for att in attachments], [
+        self.assertEqual([attachment.filename for attachment in attachments], [
             "report.txt", "report.txt",
         ])
         self.assertNotEqual(
@@ -624,7 +624,7 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
             with open(attachments[1].local_path, "rb") as file_handle:
                 self.assertEqual(file_handle.read(), b"second")
 
-        self.assertEqual([att.filename for att in attachments], [
+        self.assertEqual([attachment.filename for attachment in attachments], [
             "report.txt", "report.txt",
         ])
         self.assertNotEqual(

@@ -64,7 +64,7 @@ class SessionMemoryProjectionTests(unittest.TestCase):
 class ColonyOutputParserTests(unittest.TestCase):
     def test_forward_parser_matches_original_nested_duplicate_and_malformed_semantics(self) -> None:
         original = re.compile(r"\[SESSION:([^\]\s]+)\](.*?)\[/SESSION\]", re.DOTALL)
-        rng = random.Random(17)
+        generator = random.Random(17)
         pieces = ["[SESSION:a]", "[SESSION:b]", "[/SESSION]", "[SESSION:bad id]", "\n- Fact\n", "text", "[SESSION:"]
         fixtures = [
             "[SESSION:a]\n- outer\n[SESSION:b]\n- inner\n[/SESSION][/SESSION]",
@@ -72,7 +72,7 @@ class ColonyOutputParserTests(unittest.TestCase):
             "[SESSION:x" * 50,
             "[SESSION:x" * 50 + "\n ]",
             "[SESSION:x" * 50 + "\u2003 ][SESSION:valid]\n- Fact\n[/SESSION]",
-            *["".join(rng.choices(pieces, k=40)) for _ in range(150)],
+            *["".join(generator.choices(pieces, k=40)) for _ in range(150)],
         ]
         for value in fixtures:
             expected = {match.group(1).strip(): parse_bullets(match.group(2)) for match in original.finditer(value)}

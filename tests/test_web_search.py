@@ -38,7 +38,7 @@ _LITE_BODY = """
 """
 
 
-class _Response:
+class _WebSearchResponse:
     charset = "utf-8"
 
     def __init__(self, status: int, body: bytes) -> None:
@@ -71,7 +71,7 @@ class _FakeNet:
         if isinstance(outcome, Exception):
             raise outcome
         status, body = outcome  # type: ignore[misc]
-        yield _Response(status, body)
+        yield _WebSearchResponse(status, body)
 
 
 def _run_search(net: _FakeNet, **args: str) -> str:
@@ -153,9 +153,9 @@ class WebSearchToolTests(unittest.TestCase):
             calls.append(url)
             if url.startswith("https://html.duckduckgo.com"):
                 html_calls = sum("html.duckduckgo.com" in call for call in calls)
-                yield _Response(503, b"") if html_calls == 1 else _Response(200, _HTML_BODY.encode())
+                yield _WebSearchResponse(503, b"") if html_calls == 1 else _WebSearchResponse(200, _HTML_BODY.encode())
             else:
-                yield _Response(503, b"")
+                yield _WebSearchResponse(503, b"")
 
         result = _run_search(flaky_frontend, query="anything")
         self.assertIn("First Result", result)
@@ -178,7 +178,7 @@ class WebSearchToolTests(unittest.TestCase):
                         closed.set()
                 else:
                     await stalled.wait()
-                yield _Response(200, _LITE_BODY.encode())
+                yield _WebSearchResponse(200, _LITE_BODY.encode())
 
             with mock.patch.object(web_search, "open_http_response", frontend):
                 result = await asyncio.wait_for(

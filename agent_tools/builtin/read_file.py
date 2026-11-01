@@ -161,11 +161,11 @@ def _describe_image_file(target: str, shown_path: object) -> str:
         size = os.path.getsize(target)
     except OSError as exc:
         return f"Read failed: {exc}"
-    dims = probe_image_dimensions(target)
-    if dims is not None:
-        width, height, fmt = dims
+    dimensions = probe_image_dimensions(target)
+    if dimensions is not None:
+        width, height, image_format = dimensions
         return (
-            f"[Image: {shown} is a {width}x{height} {fmt} ({size:,} bytes)."
+            f"[Image: {shown} is a {width}x{height} {image_format} ({size:,} bytes)."
             " Vision-capable backends receive these pixels natively —"
             " describe what is actually in the image.]"
         )

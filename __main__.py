@@ -274,7 +274,7 @@ def setup_logging() -> None:
     os.makedirs(LOG_DIR, exist_ok=True)
 
     log_file = os.path.join(LOG_DIR, "cozter.log")
-    fmt = logging.Formatter(
+    formatter = logging.Formatter(
         "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
     )
 
@@ -282,11 +282,11 @@ def setup_logging() -> None:
         log_file, maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8",
     )
     file_handler.setLevel(logging.WARNING)
-    file_handler.setFormatter(fmt)
+    file_handler.setFormatter(formatter)
 
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(fmt)
+    console_handler.setFormatter(formatter)
 
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
@@ -304,7 +304,7 @@ def setup_logging() -> None:
         maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8",
     )
     timing_handler.setLevel(logging.INFO)
-    timing_handler.setFormatter(fmt)
+    timing_handler.setFormatter(formatter)
     performance.setLevel(logging.INFO)
     performance.propagate = False
     performance.addHandler(timing_handler)
@@ -483,13 +483,13 @@ async def _wait_for_update_idle(
     waiting instead of restarting through active work.
     """
     last_log = 0.0
-    last_diag = loop_start = asyncio.get_running_loop().time()
+    last_diagnostic = loop_start = asyncio.get_running_loop().time()
     while True:
         active = [bot for bot in bots if bot.has_active_turns()]
         if not active:
             return
         now = asyncio.get_running_loop().time()
-        if now - last_diag >= cfg.get_update_idle_timeout():
+        if now - last_diagnostic >= cfg.get_update_idle_timeout():
             waited = int(now - loop_start)
             logger.warning(
                 "Update deferred for at least %ds after ~%ds; "
@@ -498,7 +498,7 @@ async def _wait_for_update_idle(
                 {bot.platform_id: bot.stuck_turn_diagnostics() for bot in active},
             )
             dump_runtime_diagnostics(active, reason="update-idle-still-waiting")
-            last_diag = now
+            last_diagnostic = now
         if now - last_log >= _UPDATE_IDLE_LOG_SEC:
             logger.info(
                 "%s: %s",

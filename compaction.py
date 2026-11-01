@@ -377,7 +377,7 @@ async def _maybe_compact_under_maintenance_lock(
     data = await run_owned_worker(session.load_session, workspace_path, session_id)
     if data is None:
         return
-    msgs = data.get("messages", [])
+    messages = data.get("messages", [])
     model_window = _context_window_tokens(context_targets)
     trigger = (
         await run_owned_worker(_context_trigger, data, workspace_path, model_window)
@@ -402,12 +402,12 @@ async def _maybe_compact_under_maintenance_lock(
             # Known capacities use context size; /compact is only a fallback.
             return
         interval = workspace_mod.get_compact_interval(workspace_path)
-        if len(msgs) < interval:
+        if len(messages) < interval:
             return
         logger.info(
             "Auto-compact triggered (msgs=%d, interval=%d; no known "
             "context window)",
-            len(msgs), interval,
+            len(messages), interval,
         )
     oversized_first = _oversized_first_message_prefix(data)
     if oversized_first is not None and oversized_first[1] == 0:
@@ -420,7 +420,7 @@ async def _maybe_compact_under_maintenance_lock(
     new_summary, new_long_term, new_title, covered_count = await compact_session(
         workspace_path, session_id, summary_model,
         backend_name=backend_name,
-        _preloaded_data=data,
+        preloaded_data=data,
     )
     if not new_summary:
         logger.error(
@@ -597,7 +597,7 @@ async def compact_session(
     summary_model: str | None = None,
     *,
     backend_name: str | None = None,
-    _preloaded_data: dict | None = None,
+    preloaded_data: dict | None = None,
 ) -> tuple[str, list[str] | None, str | None, int]:
     """Run the selected backend to compact a session.
 
@@ -609,11 +609,11 @@ async def compact_session(
     [TITLE] block. On failure returns ``("", None, None, 0)``. Does NOT write
     to disk - caller takes the workspace lock and calls ``set_summary``.
 
-    _preloaded_data: pass already-loaded session dict to skip a disk read
+    preloaded_data: pass already-loaded session dict to skip a disk read
     (used by maybe_compact which loads the data to check the interval).
     """
     backend = backends_agent.get_backend(backend_name)
-    data = _preloaded_data if _preloaded_data is not None else await run_owned_worker(
+    data = preloaded_data if preloaded_data is not None else await run_owned_worker(
         session.load_session, workspace_path, session_id,
     )
     if data is None:

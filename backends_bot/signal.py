@@ -1392,19 +1392,19 @@ def _md_to_signal_body_and_spans(
         if length > 0:
             spans.append((start, length, style))
 
-    def parse_inline(inline_src: str) -> None:
+    def parse_inline(inline_source: str) -> None:
         offset = 0
         # Cache the next closer so strays scan once.
         single_closes: dict[str, int] = {}
-        while offset < len(inline_src):
-            marker = _signal_inline_marker_at(inline_src, offset)
+        while offset < len(inline_source):
+            marker = _signal_inline_marker_at(inline_source, offset)
             if marker is None:
                 # Ordinary prose contains no inline control markers. Append
                 # that whole run instead of testing/storing each character;
                 # every potential marker still uses the existing parser.
-                next_marker = _SIGNAL_INLINE_START_RE.search(inline_src, offset + 1)
-                end = next_marker.start() if next_marker is not None else len(inline_src)
-                append(inline_src[offset:end])
+                next_marker = _SIGNAL_INLINE_START_RE.search(inline_source, offset + 1)
+                end = next_marker.start() if next_marker is not None else len(inline_source)
+                append(inline_source[offset:end])
                 offset = end
                 continue
 
@@ -1414,17 +1414,17 @@ def _md_to_signal_body_and_spans(
                 if cached is not None and (cached < 0 or cached >= offset + len(open_marker)):
                     close_at = cached
                 else:
-                    close_at = _find_signal_inline_close(inline_src, close_marker, offset)
+                    close_at = _find_signal_inline_close(inline_source, close_marker, offset)
                     single_closes[close_marker] = close_at
             else:
-                close_at = _find_signal_inline_close(inline_src, close_marker, offset)
+                close_at = _find_signal_inline_close(inline_source, close_marker, offset)
             if close_at < 0:
-                append(inline_src[offset])
+                append(inline_source[offset])
                 offset += 1
                 continue
 
             start = pos
-            content = inline_src[offset + len(open_marker):close_at]
+            content = inline_source[offset + len(open_marker):close_at]
             if parse_nested:
                 parse_inline(content)
             else:

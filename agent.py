@@ -761,9 +761,9 @@ def _image_extension(path: str) -> str | None:
     return ext if ext in IMAGE_EXTENSIONS else None
 
 
-def _safe_generated_image_name(src: str, ext: str) -> str:
-    parent = os.path.basename(os.path.dirname(src))
-    stem = os.path.splitext(os.path.basename(src))[0]
+def _safe_generated_image_name(source_path: str, ext: str) -> str:
+    parent = os.path.basename(os.path.dirname(source_path))
+    stem = os.path.splitext(os.path.basename(source_path))[0]
     raw = f"{parent}-{stem}" if parent else stem
     safe = _SAFE_IMAGE_NAME_RE.sub("-", raw).strip(".-")
     return f"{safe or 'generated-image'}{ext}"
@@ -791,21 +791,21 @@ def _copy_to_unique_path(source: str, directory: str, filename: str) -> str | No
 
 
 def _copy_generated_image_into_workspace(
-    src: str, workspace_path: str,
+    source_path: str, workspace_path: str,
 ) -> str | None:
-    ext = _image_extension(src)
+    ext = _image_extension(source_path)
     if ext is None:
-        logger.warning("Ignoring generated non-image attachment: %s", src)
+        logger.warning("Ignoring generated non-image attachment: %s", source_path)
         return None
 
     try:
-        src_real = os.path.realpath(src)
+        source_real = os.path.realpath(source_path)
         ws_real = os.path.realpath(workspace_path)
     except OSError:
         return None
 
-    if is_path_within(src_real, ws_real):
-        return src_real
+    if is_path_within(source_real, ws_real):
+        return source_real
 
     try:
         # Re-resolve: symlinks must not escape the workspace.
@@ -819,7 +819,7 @@ def _copy_generated_image_into_workspace(
             )
             return None
         dest = _copy_to_unique_path(
-            src_real, dest_dir, _safe_generated_image_name(src_real, ext),
+            source_real, dest_dir, _safe_generated_image_name(source_real, ext),
         )
         if dest is None:
             logger.warning(
@@ -828,7 +828,7 @@ def _copy_generated_image_into_workspace(
         return dest
     except (OSError, ValueError):
         logger.warning(
-            "Failed to copy generated image into workspace: %s", src,
+            "Failed to copy generated image into workspace: %s", source_path,
             exc_info=True,
         )
         return None
@@ -985,20 +985,20 @@ def _collect_new_attachment_images(
     excluded = exclude_sources or set()
     seen_sources: set[str] = set()
     seen_destinations: set[str] = set()
-    for src in ordered:
-        if src in excluded or src in seen_sources:
+    for source_path in ordered:
+        if source_path in excluded or source_path in seen_sources:
             continue
-        seen_sources.add(src)
-        size = after[src][1]
+        seen_sources.add(source_path)
+        size = after[source_path][1]
         if len(copied) >= max_files or size > max_bytes - chosen.total_bytes:
-            chosen.omitted_sources.add(src)
+            chosen.omitted_sources.add(source_path)
             continue
-        dest = prepare_attachment_path(src, workspace_path)
+        dest = prepare_attachment_path(source_path, workspace_path)
         if not dest or dest in seen_destinations:
             continue
         seen_destinations.add(dest)
         copied.append(dest)
-        chosen.selected_sources.add(src)
+        chosen.selected_sources.add(source_path)
         chosen.total_bytes += size
     return copied
 
@@ -1616,7 +1616,7 @@ def _native_turn_prompt(
     skills_catalog: str = "",
     budget_includes_request: bool = True,
     history_record: execution_state.ExecutionRecord | None = None,
-    _prepare: bool = True,
+    include_prepare: bool = True,
 ) -> native_prompt.NativePrompt:
     """Budget named context before choosing bootstrap or exact-session delta."""
     memory = session_data.get("long_term", [])
@@ -1723,14 +1723,14 @@ def _native_turn_prompt(
         request_identity=request_identity,
         turn_instructions=SHELL_INPUT_RULE + "\n\n" + skills.refresh_instructions(cli=True),
     )
-    if _prepare:
+    if include_prepare:
         def prepare(record: execution_state.ExecutionRecord | None) -> native_prompt.NativePrompt:
             prepared = _native_turn_prompt(
                 backend, request, session_data, colony_items,
                 budget=budget, collaborative=collaborative, is_scheduled=is_scheduled,
                 bootstrap_request=bootstrap_request, previous_draft=previous_draft,
                 skills_catalog=skills_catalog, budget_includes_request=budget_includes_request,
-                history_record=record, _prepare=False,
+                history_record=record, include_prepare=False,
             )
             # Flexible appends role-specific sections after building shared context.
             prepared.sections.update({name: text for name, text in result.sections.items()

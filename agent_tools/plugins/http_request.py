@@ -67,13 +67,13 @@ def _clean_headers(value: object) -> dict[str, str] | str:
     if not isinstance(value, dict):
         return "Error: 'headers' must be an object of string values"
     headers: dict[str, str] = {}
-    for key, val in value.items():
-        if not isinstance(key, str) or not isinstance(val, str):
+    for key, header_value in value.items():
+        if not isinstance(key, str) or not isinstance(header_value, str):
             continue
         stripped = key.strip()
         if not stripped or stripped.casefold() in _HOP_BY_HOP_HEADERS:
             continue
-        headers[stripped] = val
+        headers[stripped] = header_value
     return headers
 
 

@@ -275,13 +275,13 @@ def append_stderr_note(text: str, stderr: str) -> str:
     """Append git's stderr excerpt to *text* with the shared clip marker."""
     if not stderr.strip():
         return text
-    clipped_err = stderr.strip()
-    if len(clipped_err) > MAX_GIT_ERROR_CHARS:
-        clipped_err = (
-            clipped_err[:MAX_GIT_ERROR_CHARS - len("… [stderr clipped]")]
+    clipped_stderr = stderr.strip()
+    if len(clipped_stderr) > MAX_GIT_ERROR_CHARS:
+        clipped_stderr = (
+            clipped_stderr[:MAX_GIT_ERROR_CHARS - len("… [stderr clipped]")]
             + "… [stderr clipped]"
         )
-    return f"{text}\n\ngit said:\n{clipped_err}"
+    return f"{text}\n\ngit said:\n{clipped_stderr}"
 
 
 def finish_git_output(

@@ -72,16 +72,16 @@ async def maybe_auto_title(
             return
         if not session.is_default_name(data.get("name")):
             return
-        msgs = data.get("messages", [])
-        if not isinstance(msgs, list):
+        messages = data.get("messages", [])
+        if not isinstance(messages, list):
             return
         if not any(
-            isinstance(msg, dict) and msg.get("role") == "assistant" for msg in msgs
+            isinstance(msg, dict) and msg.get("role") == "assistant" for msg in messages
         ):
             return
         title = await generate(
             workspace_path, session_id, summary_model,
-            backend_name=backend_name, _preloaded_data=data,
+            backend_name=backend_name, preloaded_data=data,
         )
         if not title:
             return
@@ -113,11 +113,11 @@ async def generate(
     summary_model: str | None = None,
     *,
     backend_name: str | None = None,
-    _preloaded_data: dict | None = None,
+    preloaded_data: dict | None = None,
 ) -> str | None:
     """Run a small backend call to title a session. Returns None on failure."""
     backend = backends_agent.get_backend(backend_name)
-    data = _preloaded_data if _preloaded_data is not None else await run_owned_worker(
+    data = preloaded_data if preloaded_data is not None else await run_owned_worker(
         session.load_session, workspace_path, session_id,
     )
     if data is None:

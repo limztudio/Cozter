@@ -260,8 +260,8 @@ class DetachedLoggingAndStatusTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_live_status_retains_five_lines_and_full_omitted_count(self):
         class StatusBot(ReplyDeliveryBot):
-            async def send_text(self, _chat, _text, *, rich=False):
-                return MessageHandle(chat_id=_chat, message_id='thinking')
+            async def send_text(self, chat_id, _text, *, rich=False):
+                return MessageHandle(chat_id=chat_id, message_id='thinking')
 
         with tempfile.TemporaryDirectory() as ws:
             bot = StatusBot(ws, fail_final=False)

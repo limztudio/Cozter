@@ -34,7 +34,7 @@ class AutoTitlingTests(unittest.IsolatedAsyncioTestCase):
         ):
             title = await titling.generate(
                 "/workspace", "session", "model", backend_name="test",
-                _preloaded_data=data,
+                preloaded_data=data,
             )
 
         self.assertEqual(title, "Recent Context Title")

@@ -25,7 +25,7 @@ def _history(waves=8, body_chars=12_000):
     return messages
 
 
-def _assert_pairs(test, messages):
+def assert_pairs(test, messages):
     for index, message in enumerate(messages):
         calls = message.get("tool_calls")
         if calls:
@@ -50,7 +50,7 @@ class ContextProjectionEdgeTests(unittest.TestCase):
         self.assertEqual([row for row in projected["messages"] if row["role"] == "user"],
                          [row for row in payload["messages"] if row["role"] == "user"])
         self.assertEqual(projected["messages"][0], payload["messages"][0])
-        _assert_pairs(self, projected["messages"])
+        assert_pairs(self, projected["messages"])
         for row in projected["messages"]:
             if row["role"] == "tool" and "Tool result preview" in row["content"]:
                 source_index = next(index for index, original in enumerate(history)
@@ -66,7 +66,7 @@ class ContextProjectionEdgeTests(unittest.TestCase):
         self.assertTrue(any("Earlier HTTP evidence omitted" in (row.get("content") or "")
                             for row in projected["messages"]))
         self.assertIn(history[1], projected["messages"])
-        _assert_pairs(self, projected["messages"])
+        assert_pairs(self, projected["messages"])
         history[1]["reasoning_content"] = "opaque state" * 20_000
         with self.assertRaisesRegex(RuntimeError, "preserving all user instructions"):
             hc.project_payload(payload, 6500, "state.json")
@@ -154,7 +154,7 @@ class ContextRecoveryEdgeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(any(row.get("content") == "WROTE ONCE" for row in payload["messages"]))
                 self.assertTrue(any("outcome is unknown" in (row.get("content") or "")
                                     for row in payload["messages"]))
-                _assert_pairs(self, payload["messages"])
+                assert_pairs(self, payload["messages"])
                 disk = json.loads(record.path.read_bytes())["values"]
                 self.assertEqual(disk["http_messages"][:len(saved)], saved)
                 self.assertEqual(disk["http_pending_results"], {})
@@ -215,7 +215,7 @@ class ContextRecoveryEdgeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(requests), 2)
                 self.assertLess(hc.payload_bytes(requests[1]), hc.payload_bytes(requests[0]))
                 self.assertIn(saved[1], requests[1]["messages"])
-                _assert_pairs(self, requests[1]["messages"])
+                assert_pairs(self, requests[1]["messages"])
                 self.assertEqual(json.loads(record.path.read_bytes())["values"]["http_messages"][:len(saved)], saved)
 
     async def test_cancelling_protected_floor_probe_preserves_exact_durable_history(self):
@@ -281,7 +281,7 @@ class ContextRecoveryEdgeTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(len(requests), 2)
                 self.assertLess(hc.payload_bytes(requests[1]), hc.payload_bytes(requests[0]))
                 for payload in requests:
-                    _assert_pairs(self, payload["messages"])
+                    assert_pairs(self, payload["messages"])
                     self.assertIn({"role": "user", "content": "FRESH guidance must remain exact"},
                                   payload["messages"])
                     self.assertTrue(any(row.get("content") == "WROTE ONCE" for row in payload["messages"]))

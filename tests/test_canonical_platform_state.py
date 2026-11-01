@@ -120,7 +120,7 @@ class CanonicalPlatformStateTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(titling.backends_agent, "get_backend", return_value=mock.sentinel.backend),
             mock.patch.object(titling, "run_internal_backend", new=mock.AsyncMock(return_value="Current Topic")) as backend,
         ):
-            title = await titling.generate("/fixture", "session", backend_name="test", _preloaded_data={
+            title = await titling.generate("/fixture", "session", backend_name="test", preloaded_data={
                 "summary": InvalidSummary(),
                 "messages": [{"role": "assistant", "content": "current exchange"}],
             })

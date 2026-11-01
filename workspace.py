@@ -755,10 +755,10 @@ def set_interaction_style(workspace_path: str, style: str) -> None:
 
 
 def _reasoning_effort(settings: dict) -> int:
-    val = settings.get("reasoning_effort", DEFAULT_REASONING_EFFORT)
-    if not isinstance(val, int) or isinstance(val, bool):
+    value = settings.get("reasoning_effort", DEFAULT_REASONING_EFFORT)
+    if not isinstance(value, int) or isinstance(value, bool):
         return DEFAULT_REASONING_EFFORT
-    return max(0, min(val, 100))
+    return max(0, min(value, 100))
 
 
 def get_reasoning_effort(workspace_path: str) -> int:
@@ -819,10 +819,10 @@ def set_flexible_reasoning_effort(workspace_path: str, tier: str, effort: int | 
 def _positive_int_setting(
     workspace_path: str, key: str, default: int,
 ) -> int:
-    val = _load_settings(workspace_path).get(key, default)
-    if not isinstance(val, int) or isinstance(val, bool) or val < 1:
+    value = _load_settings(workspace_path).get(key, default)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
         return default
-    return val
+    return value
 
 
 def _set_minimum_int_setting(

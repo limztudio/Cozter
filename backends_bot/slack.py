@@ -42,7 +42,7 @@ from .base import (
     upload_size_exceeds_limit,
 )
 from .formatting import (
-    _FENCE_OPEN_RE, escape_html_entities, fence_closes,
+    FENCE_OPEN_RE, escape_html_entities, fence_closes,
     render_fenced_markdown, render_headings_and_bold,
     render_inline_code,
     unused_format_marker,
@@ -196,7 +196,7 @@ def _fence_open(line: str) -> tuple[str, str] | None:
     stripped = line.lstrip()
     if not stripped or stripped[0] not in ("`", "~"):
         return None
-    match = _FENCE_OPEN_RE.match(line)
+    match = FENCE_OPEN_RE.match(line)
     if match is None:
         return None
     return line.strip(), match.group(1)
@@ -331,18 +331,18 @@ class SlackBot(BotPlatform):
             for chunk in _split_slack_markdown(text):
                 if not chunk.strip():
                     continue
-                resp = await _post_rich_markdown(client, chat_id, chunk)
+                response = await _post_rich_markdown(client, chat_id, chunk)
                 last = MessageHandle(
-                    chat_id=str(chat_id), message_id=str(resp["ts"]),
+                    chat_id=str(chat_id), message_id=str(response["ts"]),
                 )
             return last
 
         for chunk in split_text_chunks(text, _SLACK_MAX_CHARS):
             if not chunk.strip():
                 continue
-            resp = await client.chat_postMessage(channel=chat_id, text=chunk)
+            response = await client.chat_postMessage(channel=chat_id, text=chunk)
             last = MessageHandle(
-                chat_id=str(chat_id), message_id=str(resp["ts"]),
+                chat_id=str(chat_id), message_id=str(response["ts"]),
             )
         return last
 
@@ -442,7 +442,7 @@ class SlackBot(BotPlatform):
         return handler
 
     async def _on_message(
-        self, event, *, _from_app_mention: bool = False, **_kwargs,
+        self, event, *, from_app_mention: bool = False, **_kwargs,
     ) -> None:
         if event.get("subtype") not in self._ALLOWED_SUBTYPES:
             return
@@ -463,7 +463,7 @@ class SlackBot(BotPlatform):
         marker = (
             f"<@{self._bot_user_id}>" if self._bot_user_id is not None else ""
         )
-        if not _from_app_mention and marker and marker in text:
+        if not from_app_mention and marker and marker in text:
             return
         files = event.get("files") or []
 
@@ -491,7 +491,7 @@ class SlackBot(BotPlatform):
             return
         text = text.replace(marker, "").strip()
         await self._on_message(
-            {**event, "text": text}, _from_app_mention=True,
+            {**event, "text": text}, from_app_mention=True,
         )
 
     async def _handle_files(

@@ -1665,9 +1665,9 @@ class BotPlatform(ABC):
         recent = workspace.get_recent(ctx.user_id, self.recent_limit)
         if text.isdecimal():
             number = parse_decimal_int(text)
-            idx = -1 if number is None else number - 1
-            if 0 <= idx < len(recent):
-                path = recent[idx]
+            index = -1 if number is None else number - 1
+            if 0 <= index < len(recent):
+                path = recent[index]
             else:
                 if rearm_on_error:
                     await ctx.reply_text(
@@ -2074,8 +2074,8 @@ class BotPlatform(ABC):
         lines = [f"Current permission: {current}\n", "Available modes:"]
         for option_index, option in enumerate(options, 1):
             marker = " <-" if option == current else ""
-            desc = workspace.PERMISSION_DESCRIPTIONS[option]
-            lines.append(f"  {option_index}. {option} - {desc}{marker}")
+            description = workspace.PERMISSION_DESCRIPTIONS[option]
+            lines.append(f"  {option_index}. {option} - {description}{marker}")
         ceiling = workspace.permission_ceiling()
         if ceiling != "full":
             lines.append(
@@ -2098,21 +2098,21 @@ class BotPlatform(ABC):
             return
         text = ctx.text.strip().lower()
         options = workspace.AVAILABLE_PERMISSIONS
-        perm = self._pick_option(text, options)
-        if perm is None:
+        permission = self._pick_option(text, options)
+        if permission is None:
             await ctx.reply_text(
                 f"Unknown mode: {text}\nTry again (or /cancel):"
             )
             self._expect_input(ctx.user_id, self._receive_permission)
             return
         try:
-            workspace.set_permission(ws, perm)
+            workspace.set_permission(ws, permission)
         except ValueError as exc:
             await ctx.reply_text(f"{exc}\nTry again (or /cancel):")
             self._expect_input(ctx.user_id, self._receive_permission)
             return
-        desc = workspace.PERMISSION_DESCRIPTIONS[perm]
-        await ctx.reply_text(f"Permission set to: {perm}\n{desc}")
+        description = workspace.PERMISSION_DESCRIPTIONS[permission]
+        await ctx.reply_text(f"Permission set to: {permission}\n{description}")
 
 
     async def cmd_style(self, ctx: BotContext) -> None:
@@ -2127,8 +2127,8 @@ class BotPlatform(ABC):
         ]
         for option_index, option in enumerate(options, 1):
             marker = " <-" if option == current else ""
-            desc = workspace.STYLE_DESCRIPTIONS[option]
-            lines.append(f"  {option_index}. {option} - {desc}{marker}")
+            description = workspace.STYLE_DESCRIPTIONS[option]
+            lines.append(f"  {option_index}. {option} - {description}{marker}")
         lines.append(
             "\nCollaborative makes the agent ask before big or ambiguous"
             " actions and pause for your reply; autonomous makes it decide"
@@ -2153,8 +2153,8 @@ class BotPlatform(ABC):
             self._expect_input(ctx.user_id, self._receive_style)
             return
         workspace.set_interaction_style(ws, style)
-        desc = workspace.STYLE_DESCRIPTIONS[style]
-        await ctx.reply_text(f"Interaction style set to: {style}\n{desc}")
+        description = workspace.STYLE_DESCRIPTIONS[style]
+        await ctx.reply_text(f"Interaction style set to: {style}\n{description}")
 
 
     async def cmd_effort(self, ctx: BotContext) -> None:
@@ -2325,10 +2325,10 @@ class BotPlatform(ABC):
 
         current = workspace.get_compact_interval(ws)
         sessions = session.list_sessions(ws)
-        total_msgs = sum(session.get("message_count", 0) for session in sessions)
+        total_messages = sum(session.get("message_count", 0) for session in sessions)
         lines = [
             f"Fallback compact interval: {current} messages",
-            f"Sessions: {len(sessions)} ({total_msgs} total messages)",
+            f"Sessions: {len(sessions)} ({total_messages} total messages)",
             "",
             "Compaction is automatic. When every selected recipient model "
             "has a known context window, Cozter compacts from its estimated "
@@ -2398,9 +2398,9 @@ class BotPlatform(ABC):
             number = parse_decimal_int(choice)
             if number is None:
                 return None
-            idx = number - 1
-            if 0 <= idx < len(sessions) and isinstance(sessions[idx], dict):
-                return sessions[idx]
+            index = number - 1
+            if 0 <= index < len(sessions) and isinstance(sessions[index], dict):
+                return sessions[index]
             return None
         low = choice.lower()
         named = [
@@ -2663,9 +2663,9 @@ class BotPlatform(ABC):
         if not text:
             await ctx.reply_text("Usage: /inject <message>")
             return
-        inject_q = self._inject_queues.get(ctx.user_id)
-        if inject_q is not None:
-            outcome = inject_q.put_if_active(text)
+        inject_queue = self._inject_queues.get(ctx.user_id)
+        if inject_queue is not None:
+            outcome = inject_queue.put_if_active(text)
             if outcome == "accepted":
                 try:
                     await asyncio.wait_for(
@@ -2690,7 +2690,7 @@ class BotPlatform(ABC):
         lock = self._task_locks.get(uid)
         running = self._running_tasks.get(uid)
         turn_active = (
-            inject_q is not None
+            inject_queue is not None
             or (lock is not None and lock.locked())
             or (running is not None and not running.done())
             or uid in self._pending_reply_delivery_users
@@ -2875,14 +2875,14 @@ class BotPlatform(ABC):
             self._expect_input(ctx.user_id, self._receive_schedules)
             return
         number = parse_decimal_int(text)
-        idx = -1 if number is None else number - 1
-        if not (0 <= idx < len(user_schedules)):
+        index = -1 if number is None else number - 1
+        if not (0 <= index < len(user_schedules)):
             await ctx.reply_text(
                 "Invalid number. Try again (or /cancel):"
             )
             self._expect_input(ctx.user_id, self._receive_schedules)
             return
-        removed = user_schedules[idx]
+        removed = user_schedules[index]
         schedule_id = removed.get("id")
         if not isinstance(schedule_id, str) or not schedule_id:
             await ctx.reply_text(
@@ -4395,7 +4395,7 @@ class BotPlatform(ABC):
             ext in IMAGE_EXTENSIONS or attachment.kind in ("photo", "video")
         ) and ext not in _TEXT_EXTENSIONS:
             try:
-                dims = await asyncio.to_thread(
+                dimensions = await asyncio.to_thread(
                     probe_image_dimensions, attachment.local_path,
                 )
                 size = 0
@@ -4403,10 +4403,10 @@ class BotPlatform(ABC):
                     size = os.path.getsize(attachment.local_path)
                 except OSError:
                     size = 0
-                if dims is not None:
-                    width, height, fmt = dims
+                if dimensions is not None:
+                    width, height, image_format = dimensions
                     parts.append(
-                        f"[Image: {attachment.filename} is a {width}x{height} {fmt}"
+                        f"[Image: {attachment.filename} is a {width}x{height} {image_format}"
                         f" ({size:,} bytes) at {rel_path}."
                         " Vision-capable backends receive these pixels"
                         " natively: describe what is actually in the image."
@@ -4804,15 +4804,15 @@ class BotPlatform(ABC):
         ws = workspace_path or await self._current_workspace_for_turn(uid, chat_id)
         if ws is None:
             return
-        backend_name, model, summary_model, perm, summary_backend = (
+        backend_name, model, summary_model, permission, summary_backend = (
             workspace.get_run_config(ws)
         )
         # Start attribution before the first yield so a stuck wait can
         # name backend/model/elapsed even without a first progress event.
         self._begin_turn_progress(uid, backend=backend_name, model=model)
 
-        inject_q = _InjectQueue(maxsize=self.max_queue_size)
-        self._inject_queues[uid] = inject_q
+        inject_queue = _InjectQueue(maxsize=self.max_queue_size)
+        self._inject_queues[uid] = inject_queue
 
         recovering_status = (
             _RecoverableTurnStatus(self, uid, chat_id)
@@ -4937,8 +4937,8 @@ class BotPlatform(ABC):
             result = await agent.run(
                 text, ws, user_id=uid,
                 model=model, summary_model=summary_model,
-                approval=perm,
-                on_event=on_event, inject_queue=inject_q,
+                approval=permission,
+                on_event=on_event, inject_queue=inject_queue,
                 backend_name=backend_name,
                 summary_backend_name=summary_backend,
                 session_id=session_id,
@@ -4974,7 +4974,7 @@ class BotPlatform(ABC):
                         result,
                         model=model,
                         summary_model=summary_model,
-                        approval=perm,
+                        approval=permission,
                         backend_name=backend_name,
                         summary_backend_name=summary_backend,
                     )
@@ -5000,7 +5000,7 @@ class BotPlatform(ABC):
                 logger.exception("Could not register detached task callback")
         finally:
             # Idempotent window close before I/O can yield.
-            inject_q.close()
+            inject_queue.close()
             # Attribution record ends with the agent phase; delivery/post-turn
             # work no longer counts as a command-output wait.
             self._clear_turn_progress(uid)
@@ -5300,8 +5300,8 @@ class BotPlatform(ABC):
             text, attach_paths = agent.extract_attachment_sources(
                 event.content, ws,
             )
-            text, ev_awaiting = agent.extract_await(text)
-            if ev_awaiting:
+            text, event_awaiting = agent.extract_await(text)
+            if event_awaiting:
                 awaiting = True
             if text:
                 await self.send_text(chat_id, text, rich=True)
@@ -5453,12 +5453,12 @@ class BotPlatform(ABC):
             number = parse_decimal_int(text)
             if number is None:
                 return None
-            idx = number - first_number
+            index = number - first_number
             if (
-                0 <= idx < len(options)
-                and isinstance(options[idx], str)
+                0 <= index < len(options)
+                and isinstance(options[index], str)
             ):
-                return options[idx]
+                return options[index]
             return None
         if text in options:
             return text

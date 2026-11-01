@@ -5,7 +5,7 @@ import unittest
 from unittest import mock
 
 from Cozter.backends_agent import _http_context as hc
-from Cozter.tests.test_http_context_recovery import _assert_pairs
+from Cozter.tests.test_http_context_recovery import assert_pairs
 from Cozter.tests.test_http_execution_continuation import make_tool_call
 
 
@@ -63,7 +63,7 @@ class ContextFloorEdgeTests(unittest.TestCase):
         self.assertIn(archive, notice)
         self.assertIn("inclusive index ranges " + ranges + ".", notice)
         self.assertIn("Completed tools must not be replayed", notice)
-        _assert_pairs(self, minimum["messages"])
+        assert_pairs(self, minimum["messages"])
         self.assertEqual(payload, before)
 
     def test_archive_notice_cost_cannot_make_the_reported_minimum_larger(self):
@@ -123,5 +123,5 @@ class ContextFloorEdgeTests(unittest.TestCase):
         self.assertLessEqual(sum(whole_lists), 2 * len(messages))
         self.assertEqual(len(notices), 1)
         self.assertLess(caught.exception.minimum_bytes, caught.exception.original_bytes)
-        _assert_pairs(self, caught.exception.minimum_payload["messages"])
+        assert_pairs(self, caught.exception.minimum_payload["messages"])
 

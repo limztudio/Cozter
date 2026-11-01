@@ -15,10 +15,10 @@ from Cozter.agent_tools.plugins import _git_common as git
 class GitProcessOutputTests(unittest.IsolatedAsyncioTestCase):
     async def test_successful_stderr_only_diagnostic_reaches_tool_result(self) -> None:
         with tempfile.TemporaryDirectory() as path:
-            out, err, rc = await self._script(path, (
+            out, err, returncode = await self._script(path, (
                 "import sys\nsys.stderr.write('warning: fixture diagnostic\\n')\n"
             ))
-        self.assertEqual(rc, 0)
+        self.assertEqual(returncode, 0)
         result = git.finish_git_output(out, err)
         self.assertEqual(result, "OK\n\ngit said:\nwarning: fixture diagnostic")
 
@@ -31,13 +31,13 @@ class GitProcessOutputTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_both_streams_larger_than_pipe_capacity_keep_exit_status(self) -> None:
         with tempfile.TemporaryDirectory() as path:
-            out, err, rc = await self._script(path, (
+            out, err, returncode = await self._script(path, (
                 "import sys\n"
                 "sys.stdout.write('x'*1048576)\nsys.stdout.flush()\n"
                 "sys.stderr.write('failure detail\\n'+'y'*1048576)\n"
                 "sys.stderr.flush()\nsys.exit(13)\n"
             ))
-        self.assertEqual(rc, 13)
+        self.assertEqual(returncode, 13)
         self.assertLess(len(out), git._GIT_STDOUT_BYTES + 200)
         self.assertLess(len(err), git._GIT_STDERR_BYTES + 200)
         self.assertTrue(out.startswith("x" * 100))
@@ -50,13 +50,13 @@ class GitProcessOutputTests(unittest.IsolatedAsyncioTestCase):
             git, "_GIT_POST_EXIT_DRAIN_SECONDS", .03,
         ):
             started = time.monotonic()
-            out, _, rc = await self._script(path, (
+            out, _, returncode = await self._script(path, (
                 "import time\nprint('start',flush=True)\n"
                 "time.sleep(.2)\nprint('done')\n"
             ))
         self.assertGreaterEqual(time.monotonic() - started, .2)
         self.assertEqual(out.replace("\r\n", "\n"), "start\ndone\n")
-        self.assertEqual(rc, 0)
+        self.assertEqual(returncode, 0)
 
     async def test_exited_parent_with_inherited_pipes_is_bounded(self) -> None:
         with tempfile.TemporaryDirectory() as path, mock.patch.object(
@@ -72,9 +72,9 @@ class GitProcessOutputTests(unittest.IsolatedAsyncioTestCase):
             )
             try:
                 started = time.monotonic()
-                out, _, rc = await self._script(path, script)
+                out, _, returncode = await self._script(path, script)
                 self.assertLess(time.monotonic() - started, 2)
-                self.assertEqual(rc, 0)
+                self.assertEqual(returncode, 0)
                 self.assertTrue(out.startswith("parent complete"))
                 self.assertIn("output may be incomplete", out)
             finally:
@@ -82,13 +82,13 @@ class GitProcessOutputTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_post_exit_grace_keeps_late_child_output(self) -> None:
         with tempfile.TemporaryDirectory() as path:
-            out, err, rc = await self._script(path, (
+            out, err, returncode = await self._script(path, (
                 "import subprocess,sys\n"
                 "subprocess.Popen([sys.executable,'-u','-c',"
                 "'import time; time.sleep(.05); print(\"child tail\")'])\n"
                 "print('parent complete',flush=True)\n"
             ))
-        self.assertEqual(rc, 0)
+        self.assertEqual(returncode, 0)
         self.assertEqual(err, "")
         self.assertEqual(out.replace("\r\n", "\n"), "parent complete\nchild tail\n")
 

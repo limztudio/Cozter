@@ -380,11 +380,11 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
             old_config_dir = workspace.CONFIG_DIR
             workspace.CONFIG_DIR = tmp
             self.addCleanup(setattr, workspace, "CONFIG_DIR", old_config_dir)
-            first_pic = os.path.join(tmp, "first.png")
-            second_pic = os.path.join(tmp, "second.png")
-            with open(first_pic, "wb") as file_handle:
+            first_picture = os.path.join(tmp, "first.png")
+            second_picture = os.path.join(tmp, "second.png")
+            with open(first_picture, "wb") as file_handle:
                 file_handle.write(b"first-picture")
-            with open(second_pic, "wb") as file_handle:
+            with open(second_picture, "wb") as file_handle:
                 file_handle.write(b"second-picture")
 
             class _UploadBot(ReplyDeliveryBot):
@@ -408,7 +408,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
             bot = _UploadBot(tmp)
             first = AgentResult(events=[
                 ChatEvent(kind="text", content="first answer"),
-                ChatEvent(kind="attachment", content=first_pic),
+                ChatEvent(kind="attachment", content=first_picture),
             ])
             await bot._send_result("chat", tmp, first, uid="u1")
             # Texts out while the picture uploads: next turn starts.
@@ -418,7 +418,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
 
             second = AgentResult(events=[
                 ChatEvent(kind="text", content="second answer"),
-                ChatEvent(kind="attachment", content=second_pic),
+                ChatEvent(kind="attachment", content=second_picture),
             ])
             second_task = asyncio.create_task(
                 bot._send_result("chat", tmp, second, uid="u1"),
@@ -440,8 +440,8 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
             old_config_dir = workspace.CONFIG_DIR
             workspace.CONFIG_DIR = tmp
             self.addCleanup(setattr, workspace, "CONFIG_DIR", old_config_dir)
-            pic = os.path.join(tmp, "pic.png")
-            with open(pic, "wb") as file_handle:
+            picture_path = os.path.join(tmp, "pic.png")
+            with open(picture_path, "wb") as file_handle:
                 file_handle.write(b"picture")
 
             class _StuckUploadBot(ReplyDeliveryBot):
@@ -456,7 +456,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
             bot = _StuckUploadBot(tmp)
             result = AgentResult(events=[
                 ChatEvent(kind="text", content="answer"),
-                ChatEvent(kind="attachment", content=pic),
+                ChatEvent(kind="attachment", content=picture_path),
             ])
             await bot._send_result("chat", tmp, result, uid="u1")
             self.assertEqual(bot.sent, ["answer"])
@@ -469,7 +469,7 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0)
             self.assertFalse(bot.has_active_turns())
 
-    async def test_stuck_diag_reports_backend_model_pid_and_last_progress(
+    async def test_stuck_diagnostics_reports_backend_model_pid_and_last_progress(
         self,
     ) -> None:
         """A stuck wait names backend/model/PID/elapsed/last-progress."""
@@ -482,15 +482,15 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
         bot._record_turn_event_progress(
             "u1", ChatEvent(kind="tool", content="$ sleep 3600"),
         )
-        diag = bot.stuck_turn_diagnostics()
-        self.assertIn("backend=meta", diag)
-        self.assertIn("model=muse-spark-1.3", diag)
-        self.assertIn("pid=42424", diag)
-        self.assertIn("elapsed=", diag)
-        self.assertIn("last=tool", diag)
-        self.assertIn("tool: shell", diag)
+        diagnostics = bot.stuck_turn_diagnostics()
+        self.assertIn("backend=meta", diagnostics)
+        self.assertIn("model=muse-spark-1.3", diagnostics)
+        self.assertIn("pid=42424", diagnostics)
+        self.assertIn("elapsed=", diagnostics)
+        self.assertIn("last=tool", diagnostics)
+        self.assertIn("tool: shell", diagnostics)
 
-    async def test_stuck_diag_redacts_prompts_args_and_credentials(
+    async def test_stuck_diagnostics_redacts_prompts_args_and_credentials(
         self,
     ) -> None:
         """Progress labels never carry command text, paths, or secrets."""
@@ -507,21 +507,21 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
                 content="bash: run hunter2 --token s3cr3t /etc/passwd",
             ),
         )
-        diag = bot.stuck_turn_diagnostics()
+        diagnostics = bot.stuck_turn_diagnostics()
         for sensitive in ("hunter2", "s3cr3t", "--token", "/etc/passwd", "run "):
-            self.assertNotIn(sensitive, diag)
+            self.assertNotIn(sensitive, diagnostics)
         # Only the redacted tool name survives.
-        self.assertIn("tool: bash", diag)
+        self.assertIn("tool: bash", diagnostics)
         bot._record_turn_event_progress(
             "u1",
             ChatEvent(kind="file", content="changed: /etc/passwd hunter2"),
         )
-        diag = bot.stuck_turn_diagnostics()
+        diagnostics = bot.stuck_turn_diagnostics()
         for sensitive in ("hunter2", "/etc/passwd"):
-            self.assertNotIn(sensitive, diag)
-        self.assertIn("file: change", diag)
+            self.assertNotIn(sensitive, diagnostics)
+        self.assertIn("file: change", diagnostics)
 
-    async def test_stuck_diag_without_progress_uses_current_unknown_fields(
+    async def test_stuck_diagnostics_without_progress_uses_current_unknown_fields(
         self,
     ) -> None:
         """Missing progress uses explicit unknown fields in the current diagnostic format."""
@@ -529,10 +529,10 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
         task = asyncio.current_task()
         assert task is not None
         bot._running_tasks["u1"] = task
-        diag = bot.stuck_turn_diagnostics()
-        self.assertIn("u1(cancelled=False)", diag)
-        self.assertIn("backend=? model=? pid=? elapsed=0.0s", diag)
-        self.assertIn("last=<no progress events yet>", diag)
+        diagnostics = bot.stuck_turn_diagnostics()
+        self.assertIn("u1(cancelled=False)", diagnostics)
+        self.assertIn("backend=? model=? pid=? elapsed=0.0s", diagnostics)
+        self.assertIn("last=<no progress events yet>", diagnostics)
 
     async def test_turn_progress_cleared_on_cleanup(self) -> None:
         """Finished/cancelled turns drop their attribution record."""

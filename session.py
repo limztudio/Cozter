@@ -99,8 +99,8 @@ def _save_last_session_map(workspace: str, data: dict) -> None:
 
 def get_last_session(workspace: str, user_id: int | str) -> str | None:
     """Return the session id this user was last writing into, or None."""
-    val = _load_last_session_map(workspace).get(str(user_id))
-    return val if _is_safe_session_id(val) else None
+    session_id = _load_last_session_map(workspace).get(str(user_id))
+    return session_id if _is_safe_session_id(session_id) else None
 
 
 def set_last_session(
@@ -615,18 +615,18 @@ def set_summary(
     data = load_session(workspace, session_id)
     if data is None:
         return
-    msgs = data.get("messages", [])
-    if not isinstance(msgs, list):
-        msgs = []
-        data["messages"] = msgs
+    messages = data.get("messages", [])
+    if not isinstance(messages, list):
+        messages = []
+        data["messages"] = messages
     # keep_recent is a retain-count: negatives clamp to 0.
     if isinstance(keep_recent, bool) or not isinstance(keep_recent, int):
         keep_recent = 0
     keep_recent = max(0, keep_recent)
-    basis = min(summarized_count, len(msgs))
+    basis = min(summarized_count, len(messages))
     trimmed = max(0, basis - keep_recent)
     data["compacted_count"] = data.get("compacted_count", 0) + trimmed
-    data["messages"] = msgs[trimmed:]
+    data["messages"] = messages[trimmed:]
     if first_message_tail is not None and data["messages"]:
         first = data["messages"][0]
         if isinstance(first, dict):

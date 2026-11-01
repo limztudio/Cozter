@@ -169,8 +169,8 @@ def effort_band(percent: int, levels: tuple[str, ...]) -> str | None:
         return levels[-1]
     if len(levels) == 1:
         return None
-    idx = min(percent * len(levels) // 100, len(levels) - 2)
-    return levels[idx]
+    level_index = min(percent * len(levels) // 100, len(levels) - 2)
+    return levels[level_index]
 
 
 def fresh_model_catalog(

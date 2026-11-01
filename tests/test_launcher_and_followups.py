@@ -51,9 +51,9 @@ class FollowupCoverageTests(unittest.IsolatedAsyncioTestCase):
                 return "[PLAN]\n1. [low] original task\n[/PLAN]"
             return "Completed the available tasks."
 
-        async def drive(*_args, **_kwargs):
+        async def drive(*args, **_kwargs):
             calls.append(1)
-            if task := re.search(r"\nYour task: issue (\d+)\n", _args[2]):
+            if task := re.search(r"\nYour task: issue (\d+)\n", args[2]):
                 executed.add(int(task[1]))
             result = AgentResult()
             text = "Reviewed."

@@ -28,14 +28,14 @@ class CopyFileTool(AgentTool):
         )
         if isinstance(paths, str):
             return paths
-        raw_src, raw_dst, src, dst = paths
+        raw_source, raw_destination, source_path, destination_path = paths
         try:
-            ensure_parent_dir(dst)
-            if not copy_file_atomically(src, dst):
-                return no_clobber_result(raw_dst)
+            ensure_parent_dir(destination_path)
+            if not copy_file_atomically(source_path, destination_path):
+                return no_clobber_result(raw_destination)
         except OSError as exc:
             return f"Copy failed: {exc}"
-        return f"Copied: {raw_src} -> {raw_dst}"
+        return f"Copied: {raw_source} -> {raw_destination}"
 
     def summarize(self, args: dict) -> str:
         return summarize_path_pair("copy_file", args)

@@ -211,8 +211,8 @@ class CopilotBackend(Backend):
             self._workspace_model_catalogs,
             self._workspace_fallback_expires_at,
         ):
-            def expiry(cache_key: str, _bound: dict = cache) -> float:
-                value = _bound[cache_key]
+            def expiry(cache_key: str, bound_cache: dict = cache) -> float:
+                value = bound_cache[cache_key]
                 return value[1] if isinstance(value, tuple) else value
 
             for cache_key in tuple(cache):

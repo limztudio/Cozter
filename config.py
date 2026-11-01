@@ -81,9 +81,9 @@ def _load_config_object() -> dict:
     ):
         return _config_cache_data
     with open(CONFIG_PATH, encoding="utf-8") as file_handle:
-        cfg = json.load(file_handle)
-    validate_json_nesting(cfg)
-    if not isinstance(cfg, dict):
+        config_data = json.load(file_handle)
+    validate_json_nesting(config_data)
+    if not isinstance(config_data, dict):
         raise ValueError("config.json must contain a JSON object")
     # An unstatable file must still be read and validated, without trusting
     # or replacing the last successfully stamped cache entry.
@@ -91,8 +91,8 @@ def _load_config_object() -> dict:
         _config_cache_path = CONFIG_PATH
         _config_cache_mtime_ns = mtime_ns
         _config_cache_size = size
-        _config_cache_data = cfg
-    return cfg
+        _config_cache_data = config_data
+    return config_data
 
 
 def _config_dir() -> str:
@@ -151,12 +151,12 @@ def _read_config_value(key: str):
 
 
 def _get_nonempty_string(key: str) -> str:
-    """Return ``cfg[key]`` if it's a non-blank string, else the default."""
-    val = _read_config_value(key)
-    if isinstance(val, str):
-        val = val.strip()
-        if val:
-            return val
+    """Return ``config_data[key]`` if it's a non-blank string, else the default."""
+    value = _read_config_value(key)
+    if isinstance(value, str):
+        value = value.strip()
+        if value:
+            return value
     return cast(str, _DEFAULT_CONFIG[key])
 
 
@@ -182,14 +182,14 @@ def _get_https_url(key: str) -> str:
 
 
 def _get_int_at_least(key: str, minimum: int) -> int:
-    """Return ``cfg[key]`` if it is an int at least *minimum*, else default."""
-    val = _read_config_value(key)
+    """Return ``config_data[key]`` if it is an int at least *minimum*, else default."""
+    value = _read_config_value(key)
     if (
-        isinstance(val, int)
-        and not isinstance(val, bool)
-        and val >= minimum
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and value >= minimum
     ):
-        return val
+        return value
     return cast(int, _DEFAULT_CONFIG[key])
 
 
@@ -223,9 +223,9 @@ def get_show_usage() -> bool:
     and Grok's result) produce one; others are silent regardless. Defaults
     to True.
     """
-    val = _read_config_value("show_usage")
-    if isinstance(val, bool):
-        return val
+    value = _read_config_value("show_usage")
+    if isinstance(value, bool):
+        return value
     return cast(bool, _DEFAULT_CONFIG["show_usage"])
 
 
@@ -244,11 +244,11 @@ def get_max_permission() -> str:
     if not os.path.exists(CONFIG_PATH):
         return cast(str, _DEFAULT_CONFIG["max_permission"])
     # Missing keeps default; null never widens.
-    val = _load_config_object().get(
+    value = _load_config_object().get(
         "max_permission", _DEFAULT_CONFIG["max_permission"],
     )
-    if isinstance(val, str):
-        normalized = val.strip()
+    if isinstance(value, str):
+        normalized = value.strip()
         if normalized in _PERMISSION_LEVELS:
             return normalized
     return "deny"
@@ -351,10 +351,10 @@ def get_extra_models(backend_name: str) -> list[str]:
     are ignored, returning an empty list. Copilot's picker ignores extras
     because it requires the workspace's authenticated catalog.
     """
-    val = _read_config_value("extra_models")
-    if not isinstance(val, dict):
+    value = _read_config_value("extra_models")
+    if not isinstance(value, dict):
         return []
-    return normalize_string_list(val.get(backend_name))
+    return normalize_string_list(value.get(backend_name))
 
 
 def get_model_context_window(
@@ -421,7 +421,7 @@ def load_config() -> dict:
         sys.exit(1)
 
     try:
-        cfg = _load_config_object()
+        config_data = _load_config_object()
     except (json.JSONDecodeError, OSError, UnicodeDecodeError, RecursionError) as exc:
         print(f"ERROR: config.json is corrupted or unreadable: {exc}")
         print(f"Fix or delete {CONFIG_PATH}, then restart.")
@@ -431,9 +431,9 @@ def load_config() -> dict:
         print(f"Fix or delete {CONFIG_PATH}, then restart.")
         sys.exit(1)
 
-    cfg = {**_DEFAULT_CONFIG, **cfg}
+    config_data = {**_DEFAULT_CONFIG, **config_data}
 
-    raw_max_permission = cfg.get("max_permission")
+    raw_max_permission = config_data.get("max_permission")
     if isinstance(raw_max_permission, str):
         normalized_max_permission = raw_max_permission.strip()
     else:
@@ -444,7 +444,7 @@ def load_config() -> dict:
             "deny, confirm, auto, or full."
         )
         sys.exit(1)
-    cfg["max_permission"] = normalized_max_permission
+    config_data["max_permission"] = normalized_max_permission
 
     # Constructor-consumed: normalize so bad JSON can't crash startup.
     for key in (
@@ -453,47 +453,47 @@ def load_config() -> dict:
         "message_queue_size",
         "max_upload_bytes",
     ):
-        value = cfg.get(key)
+        value = config_data.get(key)
         if (
             not isinstance(value, int)
             or isinstance(value, bool)
             or value < 1
         ):
-            cfg[key] = _DEFAULT_CONFIG[key]
+            config_data[key] = _DEFAULT_CONFIG[key]
 
-    cfg["telegram_bot_tokens"] = normalize_string_list(
-        cfg.get("telegram_bot_tokens") or []
+    config_data["telegram_bot_tokens"] = normalize_string_list(
+        config_data.get("telegram_bot_tokens") or []
     )
-    slack_bot_raw = cfg.get("slack_bot_token") or ""
-    cfg["slack_bot_token"] = (
+    slack_bot_raw = config_data.get("slack_bot_token") or ""
+    config_data["slack_bot_token"] = (
         slack_bot_raw.strip() if isinstance(slack_bot_raw, str) else ""
     )
-    slack_app_raw = cfg.get("slack_app_token") or ""
-    cfg["slack_app_token"] = (
+    slack_app_raw = config_data.get("slack_app_token") or ""
+    config_data["slack_app_token"] = (
         slack_app_raw.strip() if isinstance(slack_app_raw, str) else ""
     )
-    cfg["signal_group_urls"] = normalize_string_list(
-        cfg.get("signal_group_urls") or [], allow_scalar=True,
+    config_data["signal_group_urls"] = normalize_string_list(
+        config_data.get("signal_group_urls") or [], allow_scalar=True,
     )
-    signal_socket_raw = cfg.get("signal_jsonrpc_socket") or ""
-    cfg["signal_jsonrpc_socket"] = (
+    signal_socket_raw = config_data.get("signal_jsonrpc_socket") or ""
+    config_data["signal_jsonrpc_socket"] = (
         os.path.expandvars(os.path.expanduser(signal_socket_raw.strip()))
         if isinstance(signal_socket_raw, str) else ""
     )
-    signal_account = cfg.get("signal_account", "")
+    signal_account = config_data.get("signal_account", "")
     if not isinstance(signal_account, str):
         print(f"ERROR: 'signal_account' in {CONFIG_PATH} must be a string.")
         sys.exit(1)
-    cfg["signal_account"] = signal_account.strip()
-    signal_device = cfg.get("signal_own_device_id")
+    config_data["signal_account"] = signal_account.strip()
+    signal_device = config_data.get("signal_own_device_id")
     if signal_device is not None and (
         not isinstance(signal_device, int) or isinstance(signal_device, bool) or signal_device < 0
     ):
         print(f"ERROR: 'signal_own_device_id' in {CONFIG_PATH} must be a non-negative integer or null.")
         sys.exit(1)
-    cfg["signal_own_device_id"] = signal_device or 0
+    config_data["signal_own_device_id"] = signal_device or 0
 
-    raw_user_ids = cfg.get("user_ids")
+    raw_user_ids = config_data.get("user_ids")
     if isinstance(raw_user_ids, (str, int)) and not isinstance(
         raw_user_ids, bool,
     ):
@@ -506,13 +506,13 @@ def load_config() -> dict:
             text = str(uid).strip()
             if text:
                 normalized_ids.append(text)
-        cfg["user_ids"] = normalized_ids
+        config_data["user_ids"] = normalized_ids
     else:
-        cfg["user_ids"] = []
+        config_data["user_ids"] = []
 
-    has_telegram = bool(cfg["telegram_bot_tokens"])
-    has_slack = bool(cfg["slack_bot_token"])
-    has_signal = bool(cfg["signal_group_urls"] or cfg["signal_jsonrpc_socket"] or cfg["signal_account"])
+    has_telegram = bool(config_data["telegram_bot_tokens"])
+    has_slack = bool(config_data["slack_bot_token"])
+    has_signal = bool(config_data["signal_group_urls"] or config_data["signal_jsonrpc_socket"] or config_data["signal_account"])
 
     configured = sum(bool(flag) for flag in (has_telegram, has_slack, has_signal))
     if configured == 0:
@@ -523,21 +523,21 @@ def load_config() -> dict:
         )
         sys.exit(1)
 
-    if has_telegram and not cfg.get("user_ids"):
+    if has_telegram and not config_data.get("user_ids"):
         print(f"ERROR: 'user_ids' is empty in {CONFIG_PATH}")
         print("Add at least one Telegram user ID and restart.")
         sys.exit(1)
     if has_slack:
-        if not cfg.get("slack_app_token"):
+        if not config_data.get("slack_app_token"):
             print(
                 "ERROR: 'slack_app_token' (xapp-...) is required for"
                 f" Socket Mode in {CONFIG_PATH}."
             )
             sys.exit(1)
         slack_channels = normalize_string_list(
-            cfg.get("slack_channel_ids") or []
+            config_data.get("slack_channel_ids") or []
         )
-        cfg["slack_channel_ids"] = slack_channels
+        config_data["slack_channel_ids"] = slack_channels
         if not slack_channels:
             print(f"ERROR: 'slack_channel_ids' is empty in {CONFIG_PATH}")
             print(
@@ -545,13 +545,13 @@ def load_config() -> dict:
                 " or MP...) and restart."
             )
             sys.exit(1)
-    if has_signal and not cfg["signal_group_urls"]:
+    if has_signal and not config_data["signal_group_urls"]:
         print(f"ERROR: 'signal_group_urls' is empty in {CONFIG_PATH}")
         print("Add at least one Signal group invite URL.")
         sys.exit(1)
-    if has_signal and not cfg["signal_jsonrpc_socket"]:
+    if has_signal and not config_data["signal_jsonrpc_socket"]:
         print(f"ERROR: 'signal_jsonrpc_socket' is empty in {CONFIG_PATH}")
         print("Point it at the shared signal-cli daemon Unix socket.")
         sys.exit(1)
 
-    return cfg
+    return config_data
