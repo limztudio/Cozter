@@ -2743,9 +2743,9 @@ are:
    bridging
 
 The CLI-backend files (`codex.py`, `claude_code.py`, `copilot.py`,
-`grok.py`) are thin: each defines `launch()` (build argv, spawn
-subprocess) and `parse_event()` (translate the CLI's JSONL events to
-`ChatEvent`s).
+`grok.py`, `antigravity_cli.py`) are thin: each defines `launch()`
+(build argv, spawn subprocess) and `parse_event()` (translate the
+CLI's JSONL events to `ChatEvent`s).
 
 ## Development checks
 
