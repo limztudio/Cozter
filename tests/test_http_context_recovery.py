@@ -93,14 +93,160 @@ class ContextProjectionEdgeTests(unittest.TestCase):
 
 
 class ContextRecoveryEdgeTests(unittest.IsolatedAsyncioTestCase):
-    async def _run(self, workspace, prompt="ORIGINAL obligations must remain exact"):
+    async def _run(self, workspace, prompt="ORIGINAL obligations must remain exact", *, tools_schema=None):
         proc = EventCaptureProcess()
         with (
             mock.patch.object(oa, "_system_prompt", return_value="current system and skills"),
-            mock.patch.object(oa, "_tools_for_approval", return_value=[]),
+            mock.patch.object(oa, "_tools_for_approval", return_value=tools_schema or []),
         ):
             await OfflineHttpBackend()._run_agent(proc, workspace, prompt, "model", "full", False, 50)
         return proc
+
+    async def _seed_history(self, workspace, record, saved, *, pending=None):
+        with (
+            mock.patch.object(oa, "current_run", return_value=record),
+            mock.patch.object(oa, "_stream_completion", new_callable=mock.AsyncMock,
+                              return_value=("seed", "", [])),
+        ):
+            await self._run(workspace)
+        await record.save(http_messages=saved, http_pending_results=pending or {})
+
+    async def test_large_protected_floor_uses_provider_capacity_without_losing_outcomes_or_instructions(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            async with execution_state.execution_scope(workspace, "protected-floor-job", "request"):
+                record = await execution_state.record("context-backend")
+                saved = _history(waves=6, body_chars=1500)
+                saved.insert(1, {"role": "user", "content": "EXACT-USER-INSTRUCTIONS " * 1500})
+                attachment = {"role": "user", "content": [
+                    {"type": "text", "text": "Preserve this attachment"},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,EXACT-IMAGE"}},
+                ]}
+                saved.insert(2, attachment)
+                saved.append({"role": "assistant", "content": None, "reasoning_content": "OPAQUE-CURRENT-REASONING",
+                              "tool_calls": [make_tool_call("write", "write_file"), make_tool_call("unknown", "bash")]})
+                await self._seed_history(workspace, record, saved, pending={"0": "WROTE ONCE"})
+                schema = [{"type": "function", "function": {"name": "read_file", "description": "EXACT-SCHEMA",
+                                                             "parameters": {"type": "object"}}}]
+                requests = []
+
+                async def stream(_endpoint, payload, *_args, **_kwargs):
+                    requests.append(copy.deepcopy(payload))
+                    return "continue from saved outcomes", "", []
+
+                with (
+                    mock.patch.object(oa, "current_run", return_value=record),
+                    mock.patch.object(OfflineHttpBackend, "context_window_tokens", return_value=9000),
+                    mock.patch.object(oa, "_stream_completion", side_effect=stream),
+                    mock.patch.object(oa.tools, "execute_tool", new_callable=mock.AsyncMock) as execute,
+                    self.assertLogs("Cozter.performance", "INFO") as captured,
+                ):
+                    await self._run(workspace, "CURRENT-USER-INSTRUCTIONS", tools_schema=schema)
+                execute.assert_not_awaited()
+                self.assertEqual(len(requests), 1)
+                payload = requests[0]
+                self.assertGreater(hc.payload_bytes(payload), hc.context_budget(9000))
+                self.assertEqual(payload["tools"], schema)
+                self.assertEqual(payload["messages"][0], {"role": "system", "content": "current system and skills"})
+                self.assertEqual([row for row in payload["messages"] if row["role"] == "user"],
+                                 [row for row in saved if row["role"] == "user"]
+                                 + [{"role": "user", "content": "CURRENT-USER-INSTRUCTIONS"}])
+                self.assertIn(saved[-1], payload["messages"])
+                self.assertTrue(any(row.get("content") == "WROTE ONCE" for row in payload["messages"]))
+                self.assertTrue(any("outcome is unknown" in (row.get("content") or "")
+                                    for row in payload["messages"]))
+                _assert_pairs(self, payload["messages"])
+                disk = json.loads(record.path.read_bytes())["values"]
+                self.assertEqual(disk["http_messages"][:len(saved)], saved)
+                self.assertEqual(disk["http_pending_results"], {})
+                self.assertTrue(any("reason=protected_floor_probe" in line for line in captured.output))
+                self.assertNotIn("EXACT-USER-INSTRUCTIONS", "\n".join(captured.output))
+
+    async def test_provider_rejected_protected_floor_is_not_sent_again(self):
+        for window, waves, expected_calls in ((9000, 6, 1), (None, 0, 1), (None, 6, 2)):
+            with self.subTest(window=window, waves=waves), tempfile.TemporaryDirectory() as workspace:
+                async with execution_state.execution_scope(workspace, "rejected-floor-job", "request"):
+                    record = await execution_state.record("context-backend")
+                    saved = _history(waves=waves, body_chars=1500)
+                    saved.insert(1, {"role": "user", "content": "EXACT-REQUIRED-INSTRUCTION " * 3000})
+                    await self._seed_history(workspace, record, saved)
+                    requests = []
+
+                    async def stream(_endpoint, payload, *_args, **_kwargs):
+                        requests.append(copy.deepcopy(payload))
+                        raise hc.ContextLengthError("provider context rejection", window)
+
+                    with (
+                        mock.patch.object(oa, "current_run", return_value=record),
+                        mock.patch.object(OfflineHttpBackend, "context_window_tokens", return_value=window),
+                        mock.patch.object(oa, "_stream_completion", side_effect=stream),
+                        mock.patch.object(oa.tools, "execute_tool", new_callable=mock.AsyncMock) as execute,
+                        self.assertRaisesRegex(RuntimeError, "provider rejected the required context and no smaller input"),
+                    ):
+                        await self._run(workspace)
+                    execute.assert_not_awaited()
+                    self.assertEqual(len(requests), expected_calls)
+                    sizes = [hc.payload_bytes(payload) for payload in requests]
+                    self.assertTrue(all(after < before for before, after in zip(sizes, sizes[1:])))
+                    self.assertEqual(json.loads(record.path.read_bytes())["values"]["http_messages"], saved)
+
+    async def test_smaller_protected_floor_can_succeed_after_larger_request_is_rejected(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            async with execution_state.execution_scope(workspace, "smaller-floor-job", "request"):
+                record = await execution_state.record("context-backend")
+                saved = _history(waves=8, body_chars=1500)
+                saved.insert(1, {"role": "user", "content": "EXACT-REQUIRED-INSTRUCTION " * 3000})
+                await self._seed_history(workspace, record, saved)
+                requests = []
+
+                async def stream(_endpoint, payload, *_args, **_kwargs):
+                    requests.append(copy.deepcopy(payload))
+                    if len(requests) == 1:
+                        raise hc.ContextLengthError("provider context rejection")
+                    return "accepted smaller exact input", "", []
+
+                with (
+                    mock.patch.object(oa, "current_run", return_value=record),
+                    mock.patch.object(OfflineHttpBackend, "context_window_tokens", return_value=None),
+                    mock.patch.object(oa, "_stream_completion", side_effect=stream),
+                    mock.patch.object(oa.tools, "execute_tool", new_callable=mock.AsyncMock) as execute,
+                ):
+                    await self._run(workspace)
+                execute.assert_not_awaited()
+                self.assertEqual(len(requests), 2)
+                self.assertLess(hc.payload_bytes(requests[1]), hc.payload_bytes(requests[0]))
+                self.assertIn(saved[1], requests[1]["messages"])
+                _assert_pairs(self, requests[1]["messages"])
+                self.assertEqual(json.loads(record.path.read_bytes())["values"]["http_messages"][:len(saved)], saved)
+
+    async def test_cancelling_protected_floor_probe_preserves_exact_durable_history(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            async with execution_state.execution_scope(workspace, "cancel-floor-job", "request"):
+                record = await execution_state.record("context-backend")
+                saved = _history(waves=6, body_chars=1500)
+                saved.insert(1, {"role": "user", "content": "EXACT-REQUIRED-INSTRUCTION " * 3000})
+                await self._seed_history(workspace, record, saved)
+                entered = asyncio.Event()
+                requests = []
+
+                async def stream(_endpoint, payload, *_args, **_kwargs):
+                    requests.append(copy.deepcopy(payload))
+                    entered.set()
+                    await asyncio.Event().wait()
+
+                with (
+                    mock.patch.object(oa, "current_run", return_value=record),
+                    mock.patch.object(OfflineHttpBackend, "context_window_tokens", return_value=9000),
+                    mock.patch.object(oa, "_stream_completion", side_effect=stream),
+                    mock.patch.object(oa.tools, "execute_tool", new_callable=mock.AsyncMock) as execute,
+                ):
+                    task = asyncio.create_task(self._run(workspace))
+                    await asyncio.wait_for(entered.wait(), 3)
+                    task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await task
+                execute.assert_not_awaited()
+                self.assertEqual(len(requests), 1)
+                self.assertEqual(json.loads(record.path.read_bytes())["values"]["http_messages"], saved)
 
     async def test_disk_pending_write_and_unknown_outcome_survive_preflight_and_context_retry(self):
         with tempfile.TemporaryDirectory() as workspace:

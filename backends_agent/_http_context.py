@@ -15,6 +15,24 @@ class ContextLengthError(RuntimeError):
         self.window = window
 
 
+class ContextProjectionError(RuntimeError):
+    """A conservative byte estimate cannot fit the protected wire context."""
+
+    def __init__(
+        self, minimum_payload: dict[str, Any], budget: int, original_bytes: int,
+    ) -> None:
+        super().__init__(
+            "HTTP input cannot fit the model context budget while preserving all user instructions, "
+            "current system/skills, tool schemas, attachments, and recent tool/reasoning pairs. "
+            "The exact execution history is preserved. Reduce the request or schema, or use a "
+            "model with a larger context window; completed tools have not been replayed."
+        )
+        self.minimum_payload = minimum_payload
+        self.minimum_bytes = payload_bytes(minimum_payload)
+        self.budget = budget
+        self.original_bytes = original_bytes
+
+
 _CONTEXT_WINDOW_RE = re.compile(
     r"(?:context window(?: of)?|maximum context length(?: is)?|context limit(?: is)?)"
     r"\s*([0-9][0-9,_]*)",
@@ -66,7 +84,7 @@ def project_payload(
     payload: dict[str, Any], budget: int, archive_path: str | None,
 ) -> dict[str, Any]:
     """Return a wire-only preview; every omitted byte remains in its record."""
-    total_bytes = payload_bytes(payload)
+    original_bytes = total_bytes = payload_bytes(payload)
     if total_bytes <= budget:
         return payload
     if not archive_path:
@@ -78,6 +96,8 @@ def project_payload(
     original = payload.get("messages")
     if not isinstance(original, list):
         raise RuntimeError("HTTP context projection requires a message list.")
+    if not all(isinstance(message, dict) for message in original):
+        raise RuntimeError("HTTP context projection found an invalid message.")
     messages = list(original)
     result = dict(payload, messages=messages)
     message_sizes = [payload_bytes(message) for message in messages]
@@ -85,8 +105,6 @@ def project_payload(
     position = 0
     while position < len(messages):
         message = messages[position]
-        if not isinstance(message, dict):
-            raise RuntimeError("HTTP context projection found an invalid message.")
         role = message.get("role")
         if role in {"system", "user"}:
             position += 1
@@ -121,54 +139,61 @@ def project_payload(
             "This preview is not full evidence. Do not replay completed side effects.]\n"
         )
         preview = body[:384] + marker + body[-384:]
-        if len(preview) >= len(body):
+        preview_message = dict(message, content=preview)
+        preview_bytes = payload_bytes(preview_message)
+        if preview_bytes >= message_sizes[index]:
             continue
-        messages[index] = dict(message, content=preview)
-        preview_bytes = payload_bytes(messages[index])
+        messages[index] = preview_message
         total_bytes += preview_bytes - message_sizes[index]
         message_sizes[index] = preview_bytes
         if total_bytes <= budget:
             return result
 
-    removed: set[int] = set()
-    removed_bytes = 0
-    ranges = []
-    # Keep the newest two assistant/tool waves, including opaque reasoning.
-    for start, end in groups[:-2]:
-        if messages[start].get("reasoning_content"):
-            continue
-        removed.update(range(start, end))
-        removed_bytes += sum(message_sizes[start:end])
-        ranges.append(f"{start - 1}:{end - 2}")
-        base_bytes = total_bytes - removed_bytes - len(removed)
-        if base_bytes >= budget:
-            continue
-        notice = {
-            "role": "assistant",
-            "content": (
-                "[Earlier HTTP evidence omitted from this wire preview. Full exact messages "
-                f"remain in {archive_path}; JSON values.http_messages inclusive index ranges "
-                + ", ".join(ranges)
-                + ". Read the saved JSON with read_file line/char_offset paging when needed. "
-                "All user instructions are retained. Completed tools must not be replayed; "
-                "unknown outcomes require verification. This is not full evidence.]"
-            ),
-        }
-        candidate_bytes = base_bytes + payload_bytes(notice) + 1
-        if candidate_bytes <= budget:
-            visible = []
-            inserted = False
-            for index, message in enumerate(messages):
-                if index in removed:
-                    if not inserted:
-                        visible.append(notice)
-                        inserted = True
-                else:
-                    visible.append(message)
-            return dict(payload, messages=visible)
-    raise RuntimeError(
-        "HTTP input cannot fit the model context budget while preserving all user instructions, "
-        "current system/skills, tool schemas, attachments, and recent tool/reasoning pairs. "
-        "The exact execution history is preserved. Reduce the request or schema, or use a "
-        "model with a larger context window; completed tools have not been replayed."
+    omittable = [(start, end) for start, end in groups[:-2]
+                 if not messages[start].get("reasoning_content")]
+    notice_prefix = (
+        "[Earlier HTTP evidence omitted from this wire preview. Full exact messages "
+        f"remain in {archive_path}; JSON values.http_messages inclusive index ranges "
     )
+    notice_suffix = (
+        ". Read the saved JSON with read_file line/char_offset paging when needed. "
+        "All user instructions are retained. Completed tools must not be replayed; "
+        "unknown outcomes require verification. This is not full evidence.]"
+    )
+    notice_bytes = payload_bytes({"role": "assistant", "content": notice_prefix + notice_suffix})
+    ranges: list[str] = []
+    range_bytes = 0
+    removed_count = 0
+    removed_bytes = 0
+    minimum_bytes = total_bytes
+    minimum_groups = 0
+
+    def omit(count: int) -> dict[str, Any]:
+        removed = {index for start, end in omittable[:count] for index in range(start, end)}
+        notice = {"role": "assistant", "content": notice_prefix + ", ".join(ranges[:count]) + notice_suffix}
+        visible = []
+        inserted = False
+        for index, message in enumerate(messages):
+            if index in removed:
+                if not inserted:
+                    visible.append(notice)
+                    inserted = True
+            else:
+                visible.append(message)
+        return dict(payload, messages=visible)
+
+    # Keep the newest two assistant/tool waves, including opaque reasoning.
+    for start, end in omittable:
+        selected = f"{start - 1}:{end - 2}"
+        range_bytes += len(selected) + (2 if ranges else 0)
+        ranges.append(selected)
+        removed_count += end - start
+        removed_bytes += sum(message_sizes[start:end])
+        candidate_bytes = total_bytes - removed_bytes - removed_count + notice_bytes + range_bytes + 1
+        if candidate_bytes < minimum_bytes:
+            minimum_bytes = candidate_bytes
+            minimum_groups = len(ranges)
+        if candidate_bytes <= budget:
+            return omit(len(ranges))
+    minimum_payload = omit(minimum_groups) if minimum_groups else result
+    raise ContextProjectionError(minimum_payload, budget, original_bytes)

@@ -41,7 +41,7 @@ from ..execution_state import current_run
 from ..utils import clip_status_value, iter_bounded_lines, validate_json_nesting
 from ._http_process import HttpAgentProcess, http_error_translator
 from ._http_context import (
-    ContextLengthError, context_budget, context_error, payload_bytes, project_payload,
+    ContextLengthError, ContextProjectionError, context_budget, context_error, payload_bytes, project_payload,
 )
 from .base import (
     DOC_FOLLOWING_RULE, PROGRESS_RULE, VISION_RULE, WHOLE_SCOPE_RULE,
@@ -842,6 +842,18 @@ class OpenAIChatBackend(Backend):
             ]:
                 nonlocal input_budget
                 context_recoveries = 0
+                rejected_payloads: set[str] = set()
+                last_rejected_bytes: int | None = None
+
+                def irreducible_context() -> RuntimeError:
+                    return RuntimeError(
+                        f"{self.name} provider rejected the required context and no smaller input "
+                        "can preserve all user instructions, current system/skills, tool schemas, "
+                        "attachments, and recent tool/reasoning pairs. The exact execution history "
+                        "is preserved; completed tools have not been replayed. Use a model with a "
+                        "larger context window or reduce the required request or schema."
+                    )
+
                 for recovery in range(_GENERATION_HANG_RECOVERY_LIMIT + 1):
                     ticket = supervision.new_operation(
                         workspace_path, kind="generation",
@@ -849,19 +861,35 @@ class OpenAIChatBackend(Backend):
                     )
                     with supervision.operation_scope(ticket):
                         while True:
-                            projected = (
-                                project_payload(payload, input_budget, archive_path)
-                                if input_budget is not None else payload
-                            )
+                            protected_floor_probe = False
+                            try:
+                                projected = (
+                                    project_payload(payload, input_budget, archive_path)
+                                    if input_budget is not None else payload
+                                )
+                            except ContextProjectionError as exc:
+                                # JSON bytes only estimate tokens. Let the provider
+                                # decide whether the exact protected floor fits.
+                                projected = exc.minimum_payload
+                                protected_floor_probe = True
                             before_bytes = payload_bytes(payload)
                             after_bytes = payload_bytes(projected)
-                            if before_bytes != after_bytes or context_recoveries:
+                            fingerprint = (
+                                hashlib.sha256(_compact_json(projected).encode("utf-8")).hexdigest()
+                                if rejected_payloads else None
+                            )
+                            if (fingerprint in rejected_payloads or last_rejected_bytes is not None
+                                    and after_bytes >= last_rejected_bytes):
+                                raise irreducible_context()
+                            if before_bytes != after_bytes or context_recoveries or protected_floor_probe:
                                 performance_logger.info(
                                     "stage=http_context backend=%s model=%s before_bytes=%d "
                                     "after_bytes=%d budget=%s reason=%s",
                                     self.name, clip_status_value(str(request_model or "default"), 120),
                                     before_bytes, after_bytes, input_budget,
-                                    "provider_rejection" if context_recoveries else "preflight",
+                                    "protected_floor_probe" if protected_floor_probe else (
+                                        "provider_rejection" if context_recoveries else "preflight"
+                                    ),
                                 )
                             request = asyncio.create_task(_stream_completion(
                                 endpoint, projected, headers, max_retries,
@@ -873,6 +901,12 @@ class OpenAIChatBackend(Backend):
                                     return request.result()
                                 break
                             except ContextLengthError as exc:
+                                rejected_payloads.add(
+                                    fingerprint or hashlib.sha256(_compact_json(projected).encode("utf-8")).hexdigest()
+                                )
+                                last_rejected_bytes = after_bytes
+                                if protected_floor_probe:
+                                    raise irreducible_context() from exc
                                 if context_recoveries >= _CONTEXT_RECOVERY_LIMIT:
                                     raise RuntimeError(
                                         f"{self.name} still rejected reduced context after "
