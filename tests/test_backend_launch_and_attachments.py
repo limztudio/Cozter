@@ -10,6 +10,7 @@ from unittest import mock
 from Cozter.backends_agent import base, claude_code, grok, _openai_agent as oa
 from Cozter import process_launch
 from Cozter import utils
+from Cozter.tests.helpers import OfflineHttpBackend
 
 
 _FIXTURE_PYTHON = getattr(sys, "_base_executable", None) or sys.executable
@@ -31,19 +32,13 @@ class AttachmentMarkerTests(unittest.TestCase):
 
 class HttpAttachmentMarkerTests(unittest.IsolatedAsyncioTestCase):
     async def test_uppercase_attachment_marker_reaches_http_payload(self):
-        class Backend(oa.OpenAIChatBackend):
-            name = "fixture"
-
-            def _chat_endpoint(self):
-                return "http://fixture.invalid/chat/completions"
-
         prompt = "[Photo ATTACHMENT SAVED TO: photo.png]"
         parts = [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": "fixture"}}]
         with (
             mock.patch.object(oa, "_vision_parts_for_prompt", return_value=parts) as prepare,
             mock.patch.object(oa, "_stream_completion", return_value=("done", "", [])) as stream,
         ):
-            await Backend()._run_agent(mock.Mock(), ".", prompt, "model", "deny", False, 0)
+            await OfflineHttpBackend()._run_agent(mock.Mock(), ".", prompt, "model", "deny", False, 0)
         prepare.assert_called_once_with(prompt, ".")
         self.assertEqual(stream.await_args.args[1]["messages"][1]["content"], parts)
 

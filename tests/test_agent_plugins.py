@@ -714,6 +714,10 @@ class FakeSession:
         self.calls.append({"method": method, "url": url, **kwargs})
         return self.responses.pop(0)
 
+    @asynccontextmanager
+    async def open(self):
+        yield self
+
 
 class HttpRequestToolTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -721,13 +725,8 @@ class HttpRequestToolTests(unittest.TestCase):
 
     def run_with(self, responses: list[FakeResponse], **args: object):
         session = FakeSession(responses)
-
-        @asynccontextmanager
-        async def fake_open():
-            yield session
-
         with mock.patch.object(
-            http_request_module, "open_public_http_session", fake_open,
+            http_request_module, "open_public_http_session", session.open,
         ):
             result = _run(self.tool.run(".", dict(args)))
         return result, session

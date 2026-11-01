@@ -19,6 +19,7 @@ from Cozter import skills
 from Cozter.backends_agent._http_process import HttpAgentProcess, http_error_translator
 from Cozter.backends_agent import _openai_agent as oa
 from Cozter.backends_agent.base import AgentResult
+from Cozter.tests.helpers import EventCaptureProcess
 
 
 class OpenAIBackoffTests(unittest.TestCase):
@@ -750,14 +751,6 @@ class _ReasoningToolBackend(_ToolLimitBackend):
         _effort_fields: dict,
     ) -> dict[str, object]:
         return {"thinking": {"type": "enabled", "clear_thinking": False}}
-
-
-class EventCaptureProcess:
-    def __init__(self) -> None:
-        self.events: list[dict] = []
-
-    def emit(self, event: dict) -> None:
-        self.events.append(event)
 
 
 def make_tool_call(call_id: str, path: str) -> dict:

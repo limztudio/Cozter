@@ -1452,6 +1452,42 @@ class JudgeLoopTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(restarting)
         self.assertFalse(verdict.should_continue)
 
+    async def _run_judge_turn(
+        self, prompt: str, drive_fn, judge_fn,
+    ) -> AgentResult:
+        with tempfile.TemporaryDirectory() as ws:
+            from Cozter import session
+            data = await asyncio.to_thread(session.create_session, ws, name="Work")
+            backend = type(
+                "JudgeTestBackend", (),
+                {
+                    "name": "judge-test",
+                    "default_summary_model": "m",
+                    "supports_typed_plugins": True,
+                    "supports_plugin_prelude": False,
+                    "supports_detached_tasks": False,
+                },
+            )()
+            with (
+                mock.patch.object(
+                    agent.backends_agent, "get_backend", return_value=backend,
+                ),
+                mock.patch.object(agent, "_drive_backend", drive_fn),
+                mock.patch.object(agent, "_judge_draft", judge_fn),
+                mock.patch.object(
+                    agent.compaction, "maybe_compact",
+                    new_callable=mock.AsyncMock,
+                ),
+                mock.patch.object(
+                    agent.titling, "maybe_auto_title",
+                    new_callable=mock.AsyncMock,
+                ),
+            ):
+                return await agent.run(
+                    prompt, ws, 1,
+                    backend_name="judge-test", session_id=data["id"],
+                )
+
     async def test_direct_turn_continues_then_ships(self) -> None:
         drafts = ["partial answer", "full answer"]
         calls = {"drive": 0}
@@ -1471,38 +1507,7 @@ class JudgeLoopTests(unittest.IsolatedAsyncioTestCase):
                 ), False
             return flexible.JudgeVerdict(should_continue=False), False
 
-        with tempfile.TemporaryDirectory() as ws:
-            from Cozter import session
-            data = await asyncio.to_thread(session.create_session, ws, name="Work")
-            backend = type(
-                "JudgeTestBackend", (),
-                {
-                    "name": "judge-test",
-                    "default_summary_model": "m",
-                    "supports_typed_plugins": True,
-                    "supports_plugin_prelude": False,
-                    "supports_detached_tasks": False,
-                },
-            )()
-            with (
-                mock.patch.object(
-                    agent.backends_agent, "get_backend", return_value=backend,
-                ),
-                mock.patch.object(agent, "_drive_backend", fast_drive),
-                mock.patch.object(agent, "_judge_draft", fake_judge),
-                mock.patch.object(
-                    agent.compaction, "maybe_compact",
-                    new_callable=mock.AsyncMock,
-                ),
-                mock.patch.object(
-                    agent.titling, "maybe_auto_title",
-                    new_callable=mock.AsyncMock,
-                ),
-            ):
-                result = await agent.run(
-                    "answer me", ws, 1,
-                    backend_name="judge-test", session_id=data["id"],
-                )
+        result = await self._run_judge_turn("answer me", fast_drive, fake_judge)
         self.assertEqual(result.text, "full answer")
         self.assertEqual(calls["drive"], 2)
         self.assertTrue(result.completion_verified)
@@ -1521,38 +1526,7 @@ class JudgeLoopTests(unittest.IsolatedAsyncioTestCase):
                 next_instruction="keep going",
             ), False
 
-        with tempfile.TemporaryDirectory() as ws:
-            from Cozter import session
-            data = await asyncio.to_thread(session.create_session, ws, name="Work")
-            backend = type(
-                "JudgeTestBackend", (),
-                {
-                    "name": "judge-test",
-                    "default_summary_model": "m",
-                    "supports_typed_plugins": True,
-                    "supports_plugin_prelude": False,
-                    "supports_detached_tasks": False,
-                },
-            )()
-            with (
-                mock.patch.object(
-                    agent.backends_agent, "get_backend", return_value=backend,
-                ),
-                mock.patch.object(agent, "_drive_backend", fast_drive),
-                mock.patch.object(agent, "_judge_draft", always_continue),
-                mock.patch.object(
-                    agent.compaction, "maybe_compact",
-                    new_callable=mock.AsyncMock,
-                ),
-                mock.patch.object(
-                    agent.titling, "maybe_auto_title",
-                    new_callable=mock.AsyncMock,
-                ),
-            ):
-                result = await agent.run(
-                    "finish it", ws, 1,
-                    backend_name="judge-test", session_id=data["id"],
-                )
+        result = await self._run_judge_turn("finish it", fast_drive, always_continue)
         # Capped loop exhausts (drive + follow-ups) and flags the remainder.
         self.assertEqual(calls["drive"], 1 + flexible.JUDGE_MAX_CONTINUES)
         self.assertTrue(result.continue_instruction)

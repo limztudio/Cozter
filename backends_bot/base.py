@@ -27,7 +27,7 @@ import uuid
 from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator
-from contextlib import contextmanager, suppress
+from contextlib import asynccontextmanager, contextmanager, suppress
 from dataclasses import dataclass
 from datetime import datetime
 from typing import BinaryIO, ClassVar, TypeVar
@@ -42,6 +42,7 @@ from .. import (
 from ..queue_store import AdmissionResult, QueueStore, ScheduledOccurrence
 from ..agent_tools.owned_worker import run_owned_worker
 from ..utils import await_cancelled
+from ..utils import clip_status_value
 from ..utils import create_background_task
 from ..utils import drain_queue as _drain_queue
 from ..utils import ensure_lock
@@ -437,11 +438,26 @@ class MessageHandle:
 
 def _format_status_event_line(event: agent.ChatEvent) -> str:
     content = event.content.split("\n")[0] if event.kind == "tool" else event.content
-    clipped = (
-        content[:80 - len("… [clipped]")] + "… [clipped]"
-        if len(content) > 80 else content
-    )
-    return f"» {clipped}"
+    return f"» {clip_status_value(content, 80)}"
+
+
+@asynccontextmanager
+async def collect_cleanup_errors(
+    message: str,
+) -> AsyncIterator[Callable[[Awaitable[object]], Awaitable[None]]]:
+    errors: list[BaseException] = []
+
+    async def cleanup(operation: Awaitable[object]) -> None:
+        try:
+            await operation
+        except BaseException as error:
+            errors.append(error)
+
+    yield cleanup
+    if len(errors) == 1:
+        raise errors[0]
+    if errors:
+        raise BaseExceptionGroup(message, errors)
 
 
 class _RecoverableTurnStatus:
@@ -903,27 +919,16 @@ class BotPlatform(ABC):
         """
         self._stopping = True
         self._daemon_services_started = False
-        errors: list[BaseException] = []
-
-        async def cleanup(operation: Awaitable[object]) -> None:
-            try:
-                await operation
-            except BaseException as error:
-                errors.append(error)
-
-        for owner in list(self._detached_launch_tasks):
-            await cleanup(self._cancel_owned_deliveries(owner, self._detached_launch_tasks))
-        await cleanup(self.stop_detached_task_watcher())
-        await cleanup(self.stop_scheduler())
-        await cleanup(self._stop_queue_consumers())
-        for owner in list(self._attachment_tasks):
-            await cleanup(self._cancel_attachment_uploads(owner))
-        for owner in list(self._reply_delivery_tasks):
-            await cleanup(self._cancel_owned_deliveries(owner, self._reply_delivery_tasks))
-        if len(errors) == 1:
-            raise errors[0]
-        if errors:
-            raise BaseExceptionGroup("Daemon service cleanup failed", errors)
+        async with collect_cleanup_errors("Daemon service cleanup failed") as cleanup:
+            for owner in list(self._detached_launch_tasks):
+                await cleanup(self._cancel_owned_deliveries(owner, self._detached_launch_tasks))
+            await cleanup(self.stop_detached_task_watcher())
+            await cleanup(self.stop_scheduler())
+            await cleanup(self._stop_queue_consumers())
+            for owner in list(self._attachment_tasks):
+                await cleanup(self._cancel_attachment_uploads(owner))
+            for owner in list(self._reply_delivery_tasks):
+                await cleanup(self._cancel_owned_deliveries(owner, self._reply_delivery_tasks))
 
     async def _send_text_best_effort(
         self, chat_id: str, text: str, *, rich: bool = False,
@@ -5055,9 +5060,9 @@ class BotPlatform(ABC):
 
         # Distinctive name: avoids the auto-title race.
         stripped = text.strip()
-        label = stripped.splitlines()[0] if stripped else "scheduled"
-        if len(label) > 40:
-            label = label[:40 - len("… [clipped]")] + "… [clipped]"
+        label = clip_status_value(
+            stripped.splitlines()[0] if stripped else "scheduled", 40,
+        )
         sid = job.get("session_id")
         if not isinstance(sid, str) or session.load_session(ws, sid) is None:
             sid = None

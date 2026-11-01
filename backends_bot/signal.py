@@ -18,7 +18,7 @@ import os
 import re
 import time
 from collections import deque
-from collections.abc import Awaitable, Iterable
+from collections.abc import Iterable
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -39,6 +39,7 @@ from .base import (
     PlatformNotReadyError,
     UploadTooLargeError,
     attachment_kind_from_mime,
+    collect_cleanup_errors,
     copy_file_with_limit_async,
     reserve_upload_path,
     upload_limit_message,
@@ -462,41 +463,30 @@ class SignalBot(BotPlatform):
         self._daemon_ready = False
         self._receive_ready.clear()
         self._stop_requested.set()
-        errors: list[BaseException] = []
+        async with collect_cleanup_errors("Signal cleanup failed") as cleanup:
+            await cleanup(self._stop_daemon_services())
+            subscription = self._receive_subscription
+            self._receive_subscription = None
+            self._receive_started = False
+            self._receive_subscribed = False
 
-        async def cleanup(operation: Awaitable[object]) -> None:
-            try:
-                await operation
-            except BaseException as error:
-                errors.append(error)
-
-        await cleanup(self._stop_daemon_services())
-        subscription = self._receive_subscription
-        self._receive_subscription = None
-        self._receive_started = False
-        self._receive_subscribed = False
-
-        async def unsubscribe() -> None:
-            if subscription is not None:
-                with contextlib.suppress(Exception):
-                    await self._rpc_request(
-                        "unsubscribeReceive",
-                        {"subscription": subscription},
-                        timeout=5,
-                    )
-        await cleanup(unsubscribe())
-        for task in list(self._notification_tasks):
-            task.cancel()
-        if self._notification_tasks:
-            await cleanup(asyncio.gather(
-                *self._notification_tasks, return_exceptions=True,
-            ))
-        await cleanup(self._flush_outbound_journal())
-        await cleanup(self._stop_jsonrpc())
-        if len(errors) == 1:
-            raise errors[0]
-        if errors:
-            raise BaseExceptionGroup("Signal cleanup failed", errors)
+            async def unsubscribe() -> None:
+                if subscription is not None:
+                    with contextlib.suppress(Exception):
+                        await self._rpc_request(
+                            "unsubscribeReceive",
+                            {"subscription": subscription},
+                            timeout=5,
+                        )
+            await cleanup(unsubscribe())
+            for task in list(self._notification_tasks):
+                task.cancel()
+            if self._notification_tasks:
+                await cleanup(asyncio.gather(
+                    *self._notification_tasks, return_exceptions=True,
+                ))
+            await cleanup(self._flush_outbound_journal())
+            await cleanup(self._stop_jsonrpc())
         logger.info("Signal bot stopped.")
 
     async def _open_jsonrpc_socket(

@@ -20,14 +20,12 @@ from Cozter.agent_tools.builtin import copy_file as copy_tool
 from Cozter.agent_tools.builtin import glob as glob_tool
 from Cozter.agent_tools.builtin.read_file import ReadFileTool
 from Cozter.backends_agent import _openai_agent as openai_agent
+from Cozter.tests.helpers import OfflineHttpBackend
 
 
-class _PermissionBackend(openai_agent.OpenAIChatBackend):
+class _PermissionBackend(OfflineHttpBackend):
     name = "permission_test"
     supports_vision = False
-
-    def _chat_endpoint(self) -> str:
-        return "http://unused.invalid/chat/completions"
 
     def _max_agent_turns(self) -> int:
         return 2

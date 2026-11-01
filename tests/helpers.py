@@ -29,6 +29,16 @@ class BytesContent:
         return chunk
 
 
+class EventCaptureProcess:
+    """In-memory process stub that records emitted agent events."""
+
+    def __init__(self) -> None:
+        self.events: list[dict] = []
+
+    def emit(self, event: dict) -> None:
+        self.events.append(event)
+
+
 class OfflineRecord:
     """In-memory execution record that keeps a snapshot after each save."""
 

@@ -11,7 +11,9 @@ from unittest import mock
 
 from Cozter.backends_agent import _openai_agent as oa
 from Cozter import execution_state, skills
-from Cozter.tests.helpers import OfflineHttpBackend, OfflineRecord
+from Cozter.tests.helpers import (
+    EventCaptureProcess, OfflineHttpBackend, OfflineRecord,
+)
 
 
 class _ReasoningBackend(OfflineHttpBackend):
@@ -26,14 +28,9 @@ def make_tool_call(call_id, name="read_file", path="file.txt"):
     }
 
 
-def _process():
-    events = []
-    return SimpleNamespace(emit=events.append, events=events)
-
-
 class HttpExecutionContinuationTests(unittest.IsolatedAsyncioTestCase):
     async def _run(self, backend=None, prompt="do the work", **kwargs):
-        proc = _process()
+        proc = EventCaptureProcess()
         await (backend or OfflineHttpBackend())._run_agent(
             proc, kwargs.get("workspace", "/workspace"), prompt, kwargs.get("model", "model-a"),
             kwargs.get("approval", "full"), kwargs.get("compaction", False),

@@ -1,6 +1,6 @@
 """Declared tool result budgets survive dispatch without trusting call args."""
 
-from contextlib import asynccontextmanager, redirect_stdout
+from contextlib import redirect_stdout
 import io
 import json
 from types import SimpleNamespace
@@ -60,11 +60,7 @@ class PluginResultBudgetTests(unittest.IsolatedAsyncioTestCase):
             headers={"Content-Type": "text/plain"}, body=body.encode(),
         )])
 
-        @asynccontextmanager
-        async def open_session():
-            yield session
-
-        with mock.patch.object(http_request, "open_public_http_session", open_session):
+        with mock.patch.object(http_request, "open_public_http_session", session.open):
             result = await self.dispatch("http_request", {
                 "url": "https://api.example.com/data", "max_chars": 12_000,
             })
@@ -77,12 +73,8 @@ class PluginResultBudgetTests(unittest.IsolatedAsyncioTestCase):
     async def test_web_fetch_preserves_its_advertised_preview(self):
         body = "fetch-body-" * 2_500
 
-        @asynccontextmanager
-        async def open_session():
-            yield object()
-
         with (
-            mock.patch.object(web_fetch, "_open_public_http_session", open_session),
+            mock.patch.object(web_fetch, "_open_public_http_session", FakeSession([]).open),
             mock.patch.object(web_fetch, "_fetch_following_redirects", new_callable=mock.AsyncMock,
                               return_value=("https://example.com/data", "text/plain", body, False)),
         ):

@@ -42,7 +42,8 @@ from .base import (
     upload_size_exceeds_limit,
 )
 from .formatting import (
-    escape_html_entities, render_fenced_markdown, render_headings_and_bold,
+    _FENCE_OPEN_RE, escape_html_entities, fence_closes,
+    render_fenced_markdown, render_headings_and_bold,
     render_inline_code,
     unused_format_marker,
 )
@@ -114,7 +115,6 @@ _SLACK_MAX_CHARS = 39_000
 _SLACK_MARKDOWN_LIMIT = 12_000
 _SLACK_SEND_MAX_ATTEMPTS = 5
 _SLACK_SEND_MAX_DELAY_SEC = 60.0
-_FENCE_OPEN_RE = re.compile(r"^\s*(`{3,}|~{3,}).*$")
 
 _SLACK_ITALIC_STAR_RE = re.compile(r"(?<!\w)\*([^*]+?)\*(?!\w)")
 _SLACK_STRIKE_RE = re.compile(r"~~(.+?)~~")
@@ -202,18 +202,6 @@ def _fence_open(line: str) -> tuple[str, str] | None:
     return line.strip(), match.group(1)
 
 
-def _fence_closes(line: str, marker: str) -> bool:
-    """Whether *line* is a valid close for the active fenced block."""
-    if not marker:
-        return False
-    # A close is whitespace + marker run.
-    stripped = line.strip()
-    return (
-        len(stripped) >= len(marker)
-        and stripped.strip(marker[0]) == ""
-    )
-
-
 def _split_slack_markdown(
     text: str, limit: int = _SLACK_MARKDOWN_LIMIT,
 ) -> list[str]:
@@ -253,7 +241,7 @@ def _split_slack_markdown(
         prefix = f"{active_fence[0]}\n" if active_fence else ""
         for line in raw_chunk.splitlines():
             if active_fence is not None:
-                if _fence_closes(line, active_fence[1]):
+                if fence_closes(line, active_fence[1]):
                     active_fence = None
                 continue
             active_fence = _fence_open(line)

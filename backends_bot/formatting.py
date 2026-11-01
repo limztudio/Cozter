@@ -73,6 +73,17 @@ def render_inline_code(
     )
 
 
+def fence_closes(line: str, marker: str) -> bool:
+    """Whether *line* is a valid close for the active fenced block."""
+    if not marker:
+        return False
+    stripped = line.strip()
+    return (
+        len(stripped) >= len(marker)
+        and stripped.strip(marker[0]) == ""
+    )
+
+
 def iter_fenced_markdown(
     text: str,
 ) -> Iterator[tuple[bool, list[str]]]:
@@ -88,12 +99,8 @@ def iter_fenced_markdown(
     if not isinstance(text, str):
         return
     for source_line in text.split("\n"):
-        stripped = source_line.strip()
         if fence_marker is not None:
-            if (
-                len(stripped) >= len(fence_marker)
-                and stripped.strip(fence_marker[0]) == ""
-            ):
+            if fence_closes(source_line, fence_marker):
                 yield True, code_lines
                 code_lines = []
                 fence_marker = None

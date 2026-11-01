@@ -14,7 +14,7 @@ from Cozter import agent, colony, config, router, schedules, session, workspace
 from Cozter import titling
 from Cozter.agent_tools.builtin import web_search as web_search_mod
 from Cozter.backends_agent.base import ChatEvent
-from Cozter.backends_bot.base import BotContext, BotPlatform, ensure_upload_dir
+from Cozter.backends_bot.base import BotPlatform, ensure_upload_dir
 from Cozter.tests.helpers import OfflineBot, persist_queue_entry, temporary_config
 
 
@@ -1283,15 +1283,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                     lock = bot._ensure_task_lock("u1")
                     await lock.acquire()
                     bot._awaiting_answer.add("u1")
-                    ctx = BotContext(
-                        user_id="u1",
-                        chat_id="chat",
-                        text="answer",
-                        command=None,
-                        args="",
-                        attachment=None,
-                        platform=bot,
-                    )
+                    ctx = bot.make_context("u1", "chat", text="answer")
 
                     await bot._dispatch_ai(ctx, "answer")
                     await asyncio.sleep(0)
@@ -1334,15 +1326,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                     msg_queue.put_nowait(("old queued", "chat", old_id, False))
                     bot._awaiting_answer.add("u1")
                     bot._update_restart_pending = True
-                    ctx = BotContext(
-                        user_id="u1",
-                        chat_id="chat",
-                        text="answer",
-                        command=None,
-                        args="",
-                        attachment=None,
-                        platform=bot,
-                    )
+                    ctx = bot.make_context("u1", "chat", text="answer")
 
                     await bot._dispatch_ai(ctx, "answer")
 
@@ -1458,13 +1442,13 @@ class QueueStateFallbackTests(unittest.TestCase):
                         side_effect=persist_after_signal,
                     ):
                         first_task = asyncio.create_task(
-                            bot._dispatch_ai(_queue_ctx(bot, "first"), "first"),
+                            bot._dispatch_ai(bot.make_context("u1", "chat", text="first"), "first"),
                         )
                         await asyncio.wait_for(
                             first_entered_persist.wait(), timeout=1,
                         )
                         second_task = asyncio.create_task(
-                            bot._dispatch_ai(_queue_ctx(bot, "second"), "second"),
+                            bot._dispatch_ai(bot.make_context("u1", "chat", text="second"), "second"),
                         )
                         await asyncio.sleep(0)
                         bot._queue_file_lock.release()
@@ -1499,7 +1483,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                 try:
                     bot = _GatedDrainBot()
                     first_task = asyncio.create_task(
-                        bot._dispatch_ai(_queue_ctx(bot, "first"), "first"),
+                        bot._dispatch_ai(bot.make_context("u1", "chat", text="first"), "first"),
                     )
                     await asyncio.wait_for(bot.entered.wait(), timeout=2)
                     self.assertEqual(bot.ran, ["first"])
@@ -1521,7 +1505,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                     ):
                         second_task = asyncio.create_task(
                             bot._dispatch_ai(
-                                _queue_ctx(bot, "second"), "second",
+                                bot.make_context("u1", "chat", text="second"), "second",
                             ),
                         )
                         await asyncio.wait_for(
@@ -1633,18 +1617,6 @@ async def _finish_queue_test(bot, old_config_dir, *tasks) -> None:
     workspace.CONFIG_DIR = old_config_dir
 
 
-def _queue_ctx(bot: _GatedDrainBot, text: str) -> BotContext:
-    return BotContext(
-        user_id="u1",
-        chat_id="chat",
-        text=text,
-        command=None,
-        args="",
-        attachment=None,
-        platform=bot,
-    )
-
-
 class MessageDrainedAfterTurnTests(unittest.TestCase):
     """Regression: a message queued during a turn must pop afterwards.
 
@@ -1658,11 +1630,11 @@ class MessageDrainedAfterTurnTests(unittest.TestCase):
 
     async def _assert_queued_turn_drains(self, bot: _GatedDrainBot) -> None:
         first_turn_task = asyncio.create_task(
-            bot._dispatch_ai(_queue_ctx(bot, "first"), "first"),
+            bot._dispatch_ai(bot.make_context("u1", "chat", text="first"), "first"),
         )
         await asyncio.wait_for(bot.entered.wait(), timeout=2)
         # Queue the second message while the first turn is still active.
-        await bot._dispatch_ai(_queue_ctx(bot, "second"), "second")
+        await bot._dispatch_ai(bot.make_context("u1", "chat", text="second"), "second")
         self.assertEqual(bot.ran, ["first"])
         bot.gate.set()
         await first_turn_task

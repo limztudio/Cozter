@@ -2392,7 +2392,7 @@ The runtime contains 81 Python source files, separate from the tests below.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (197 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 194 `test_*.py` modules:
+- Tests (198 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 195 `test_*.py` modules:
   `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`,
   `test_agent_post_turn.py`, `test_agent_process_cleanup.py`, `test_agent_prompt.py`,
   `test_agent_tools.py`, `test_antigravity_capabilities.py`, `test_antigravity_cli_backend.py`,
@@ -2420,7 +2420,7 @@ The runtime contains 81 Python source files, separate from the tests below.
   `test_flexible_routing_escalation.py`, `test_flexible_tier_leases.py`, `test_format_marker_latency.py`,
   `test_git_checkout_integrity.py`, `test_git_cold_launch.py`, `test_git_plugin_paging.py`,
   `test_git_process_output.py`, `test_grok_model_line_latency.py`, `test_hang_diagnosis_backend.py`,
-  `test_hang_supervision.py`, `test_http_body_sniff.py`, `test_http_context_recovery.py`,
+  `test_hang_supervision.py`, `test_http_body_sniff.py`, `test_http_context_floor.py`, `test_http_context_recovery.py`,
   `test_http_event_framing.py`, `test_http_execution_continuation.py`, `test_http_generation_supervision.py`,
   `test_http_latency.py`, `test_http_lease_bootstrap.py`, `test_http_owned_mutation_cancellation.py`,
   `test_http_pending_checkpoints.py`, `test_http_redirect_method.py`, `test_http_restore_accounting.py`,

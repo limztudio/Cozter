@@ -877,6 +877,11 @@ class Backend(ABC):
         temp state; both drain paths call this after reaping.
         """
 
+    def _detached_unsupported_error(self) -> NotImplementedError:
+        return NotImplementedError(
+            f"{self.name or type(self).__name__} {_DETACHED_UNSUPPORTED_SUFFIX}",
+        )
+
     async def launch_detached(
         self,
         workspace_path: str,
@@ -887,9 +892,7 @@ class Backend(ABC):
         effort: int = 0,
     ) -> str:
         """Start a provider-owned detached task and return its identifier."""
-        raise NotImplementedError(
-            f"{self.name or type(self).__name__} {_DETACHED_UNSUPPORTED_SUFFIX}",
-        )
+        raise self._detached_unsupported_error()
 
     async def get_detached_task_status(
         self,
@@ -897,9 +900,7 @@ class Backend(ABC):
         task_id: str,
     ) -> DetachedTaskStatus | None:
         """Return a task's latest state, or None if it no longer exists."""
-        raise NotImplementedError(
-            f"{self.name or type(self).__name__} {_DETACHED_UNSUPPORTED_SUFFIX}",
-        )
+        raise self._detached_unsupported_error()
 
     async def get_detached_task_output(
         self,
@@ -907,9 +908,7 @@ class Backend(ABC):
         task_id: str,
     ) -> str:
         """Return a detached task's most recent/final output."""
-        raise NotImplementedError(
-            f"{self.name or type(self).__name__} {_DETACHED_UNSUPPORTED_SUFFIX}",
-        )
+        raise self._detached_unsupported_error()
 
     async def stop_detached_task(
         self,
@@ -917,9 +916,7 @@ class Backend(ABC):
         task_id: str,
     ) -> bool:
         """Request cancellation; True means the provider accepted it."""
-        raise NotImplementedError(
-            f"{self.name or type(self).__name__} {_DETACHED_UNSUPPORTED_SUFFIX}",
-        )
+        raise self._detached_unsupported_error()
 
     def tier_model(self, tier: str) -> str:
         """Default model for one of flexible's difficulty tiers."""

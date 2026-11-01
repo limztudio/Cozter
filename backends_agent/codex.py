@@ -11,6 +11,7 @@ import time
 
 from ..execution_state import native_session_id, record_missing_native_session
 from ..process_launch import create_prompt_subprocess
+from ..utils import clip_status_value
 from .base import (
     CLI_MODEL_DISCOVERY_TIMEOUT_SEC,
     MODEL_CATALOG_TTL_SEC, AgentResult, Backend, ChatEvent, append_text_result,
@@ -115,10 +116,7 @@ def _stderr_preview(value: str | bytes | None) -> str:
         value = value.decode("utf-8", errors="replace")
     if not isinstance(value, str):
         return ""
-    cleaned = value.strip()
-    if len(cleaned) > 200:
-        return cleaned[:200 - len("… [clipped]")] + "… [clipped]"
-    return cleaned
+    return clip_status_value(value.strip(), 200)
 
 
 class CodexBackend(Backend):

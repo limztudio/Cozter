@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
 import unittest
 from unittest import mock
 
@@ -30,11 +29,7 @@ class HttpRedirectMethodTests(unittest.TestCase):
                     ),
                 ])
 
-                @asynccontextmanager
-                async def fake_session():
-                    yield session
-
-                with mock.patch.object(http_request, "open_public_http_session", fake_session):
+                with mock.patch.object(http_request, "open_public_http_session", session.open):
                     result = asyncio.run(http_request.HttpRequestTool().run(".", {
                         "url": "https://api.example.com/start", "method": method,
                         "body": "request payload",
@@ -51,11 +46,7 @@ class HttpRedirectMethodTests(unittest.TestCase):
                           headers={"Content-Type": "image/png"}, body=b"binary"),
         ])
 
-        @asynccontextmanager
-        async def fake_session():
-            yield session
-
-        with mock.patch.object(http_request, "open_public_http_session", fake_session):
+        with mock.patch.object(http_request, "open_public_http_session", session.open):
             result = asyncio.run(http_request.HttpRequestTool().run(".", {
                 "url": "https://api.example.com/start", "method": "POST", "body": "payload",
             }))

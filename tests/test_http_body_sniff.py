@@ -1,7 +1,6 @@
 """Optional JSON detection must accept deeply nested arbitrary text bodies."""
 
 import asyncio
-from contextlib import asynccontextmanager
 import unittest
 from unittest import mock
 
@@ -17,12 +16,8 @@ class HttpBodySniffTests(unittest.TestCase):
                           headers={"Content-Type": "text/plain"}, body=b"accepted"),
         ])
 
-        @asynccontextmanager
-        async def fake_session():
-            yield session
-
         with (
-            mock.patch.object(http_request, "open_public_http_session", fake_session),
+            mock.patch.object(http_request, "open_public_http_session", session.open),
             # JSON decoder stack limits differ among supported Python versions.
             mock.patch.object(http_request.json, "loads", side_effect=RecursionError),
         ):

@@ -37,7 +37,8 @@ from .base import (
     record_error_event, track_messages_stream_session, truncate_status_text,
 )
 from ..utils import (
-    close_subprocess_pipe, is_path_within, wait_for_process_exit,
+    clip_status_value, close_subprocess_pipe, is_path_within,
+    wait_for_process_exit,
 )
 
 logger = logging.getLogger(__name__)
@@ -716,13 +717,10 @@ class ClaudeCodeBackend(Backend):
         try:
             sessions = json.loads(stdout)
         except json.JSONDecodeError:
-            preview = stdout[:200 - len("… [clipped]")]
-            if len(stdout) > 200:
-                preview += "… [clipped]"
             logger.warning(
                 "Claude Code background task listing was not JSON"
                 " (preview): %s",
-                preview,
+                clip_status_value(stdout, 200),
             )
             return DetachedTaskStatus("unknown")
         if not isinstance(sessions, list):

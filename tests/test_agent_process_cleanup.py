@@ -95,17 +95,17 @@ class AgentProcessCleanupTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    class _BrokenBackend:
+        name = "broken"
+        executable = "broken-cli"
+
+        async def launch(self, *args, **kwargs):
+            del args, kwargs
+            raise RuntimeError("stdin closed during startup")
+
     def test_backend_launch_failure_becomes_a_user_facing_result(self) -> None:
-        class BrokenBackend:
-            name = "broken"
-            executable = "broken-cli"
-
-            async def launch(self, *args, **kwargs):
-                del args, kwargs
-                raise RuntimeError("stdin closed during startup")
-
         result, restarting = asyncio.run(agent._drive_backend(
-            BrokenBackend(), "/work", "prompt", None, "auto", effort=0,
+            self._BrokenBackend(), "/work", "prompt", None, "auto", effort=0,
         ))
 
         self.assertFalse(restarting)
@@ -113,15 +113,7 @@ class AgentProcessCleanupTests(unittest.TestCase):
         self.assertIn("stdin closed during startup", result.text)
 
     def test_launch_failure_honors_pending_and_terminal_injects(self) -> None:
-        class BrokenBackend:
-            name = "broken"
-            executable = "broken-cli"
-
-            async def launch(self, *args, **kwargs):
-                del args, kwargs
-                raise RuntimeError("stdin closed during startup")
-
-        class DelayedBrokenBackend(BrokenBackend):
+        class DelayedBrokenBackend(self._BrokenBackend):
             def __init__(self) -> None:
                 self.started = asyncio.Event()
                 self.release = asyncio.Event()
@@ -157,7 +149,7 @@ class AgentProcessCleanupTests(unittest.TestCase):
 
             terminal_queue = _InjectQueue(maxsize=1)
             _result, restarting = await agent._drive_backend(
-                BrokenBackend(), "/work", "prompt", None, "auto", effort=0,
+                self._BrokenBackend(), "/work", "prompt", None, "auto", effort=0,
                 inject_queue=terminal_queue,
                 injected=[],
                 close_inject_on_completion=True,

@@ -359,23 +359,6 @@ class BackendPermissionCommandTests(unittest.TestCase):
 
         return asyncio.run(run())
 
-    def _grok_command(
-        self,
-        approval: str,
-        *,
-        compaction: bool = False,
-        model: str | None = None,
-        effort: int = 0,
-        prompt: str = "summarize",
-    ) -> tuple[str, ...]:
-        return _launch_grok_command(
-            approval,
-            compaction=compaction,
-            model=model,
-            effort=effort,
-            prompt=prompt,
-        )
-
     def test_permission_argument_maps_are_explicit_and_fail_restricted(self) -> None:
         mappings = (
             (
@@ -452,7 +435,7 @@ class BackendPermissionCommandTests(unittest.TestCase):
         self.assertNotIn("--allow-all-tools", copilot_command)
         self.assertNotIn("--yolo", copilot_command)
 
-        grok_command = self._grok_command("deny", compaction=True)
+        grok_command = _launch_grok_command("deny", compaction=True)
         self.assertIn("--permission-mode", grok_command)
         self.assertEqual(
             grok_command[grok_command.index("--permission-mode") + 1],
@@ -472,7 +455,7 @@ class BackendPermissionCommandTests(unittest.TestCase):
     def test_grok_auto_launch_auto_approves_inside_the_workspace_sandbox(
         self,
     ) -> None:
-        command = self._grok_command("auto")
+        command = _launch_grok_command("auto")
         self.assertIn("--always-approve", command)
         self.assertIn("--sandbox", command)
         self.assertEqual(
@@ -791,12 +774,7 @@ warning: ignored after the catalog
     def test_codex_launch_attaches_vision_images(self) -> None:
         async def run() -> None:
             with tempfile.TemporaryDirectory() as ws:
-                rel = os.path.join(".cozter", "uploads", "photo.png")
-                local_path = os.path.join(ws, rel)
-                os.makedirs(os.path.dirname(local_path))
-                with open(local_path, "wb") as handle:
-                    handle.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
-                prompt = f"see\n[Photo attachment saved to: {rel}]"
+                _rel, local_path, prompt = _vision_photo_fixture(ws)
                 with (
                     mock.patch.object(
                         codex_mod, "executable_command",
@@ -821,12 +799,7 @@ warning: ignored after the catalog
     def test_claude_launch_adds_vision_hint(self) -> None:
         async def run() -> None:
             with tempfile.TemporaryDirectory() as ws:
-                rel = os.path.join(".cozter", "uploads", "photo.png")
-                local_path = os.path.join(ws, rel)
-                os.makedirs(os.path.dirname(local_path))
-                with open(local_path, "wb") as handle:
-                    handle.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
-                prompt = f"see\n[Photo attachment saved to: {rel}]"
+                _rel, _local_path, prompt = _vision_photo_fixture(ws)
                 with (
                     mock.patch.object(
                         claude_code_mod, "executable_command",

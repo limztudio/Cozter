@@ -16,8 +16,8 @@ from dataclasses import dataclass, field
 from ..base import truncate_with_marker
 from ...process_launch import create_captured_subprocess
 from ...utils import (
-    close_subprocess_pipe, has_managed_process_group, kill_and_wait,
-    wait_for_process_exit,
+    clip_status_value, close_subprocess_pipe, has_managed_process_group,
+    kill_and_wait, wait_for_process_exit,
 )
 
 MAX_OUTPUT_CHARS = 12_000
@@ -138,12 +138,9 @@ def clean_ref(value: object, *, what: str = "ref") -> tuple[str | None, str | No
 def first_stderr_line(stderr: str) -> str:
     """Clip git's first stderr line for the model-facing error detail."""
     first_line = stderr.strip().splitlines()
-    raw_detail = first_line[0] if first_line else "?"
-    if len(raw_detail) > MAX_GIT_ERROR_CHARS:
-        raw_detail = (
-            raw_detail[:MAX_GIT_ERROR_CHARS - len("… [clipped]")]
-            + "… [clipped]"
-        )
+    raw_detail = clip_status_value(
+        first_line[0] if first_line else "?", MAX_GIT_ERROR_CHARS,
+    )
     return raw_detail or "?"
 
 
