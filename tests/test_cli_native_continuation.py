@@ -116,7 +116,7 @@ class NativeCliContinuationTests(unittest.IsolatedAsyncioTestCase):
                     self.assertNotIn("--ephemeral", cmd)
                     if module is copilot:
                         self.assertEqual(call.kwargs["env"]["COPILOT_HOME"], home)
-                        self.assertIn("--no-remote-export", cmd)
+                        self.assertIn("--sync-session=off", cmd)
                         self.assertNotIn("--session-id", cmd)
                     await backend.cleanup_process(proc)
 

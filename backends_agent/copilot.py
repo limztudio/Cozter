@@ -338,7 +338,7 @@ class CopilotBackend(Backend):
                     "--disable-builtin-mcps",
                     "--no-auto-update",
                     "--no-custom-instructions",
-                    "--no-remote-export",
+                    "--sync-session=off",
                 ],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
@@ -476,7 +476,7 @@ class CopilotBackend(Backend):
             "json",
             "--no-color",
             # Keep this private session local; never export it remotely.
-            "--no-remote-export",
+            "--sync-session=off",
         ]
         self.append_launch_options(cmd, model, effort, approval)
         if native_id is not None:

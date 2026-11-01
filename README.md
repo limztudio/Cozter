@@ -1663,8 +1663,8 @@ tiers still inherit their existing workspace effort.
 Defaults put all three tiers on `codex` (`gpt-6-luna` / `gpt-6-sol` /
 `gpt-6.1-sol`), with `gpt-6.1-sol` for chat and `gpt-6-luna` for summaries.
 These defaults follow the [current Codex model guidance](https://developers.openai.com/codex/models)
-and the installed CLI catalog (verified 2026-10-25 against codex-cli 0.164.0
-and grok 1.0.52; codex's `gpt-5.5` retired from the live catalog on 2026-10-14 and is no longer in the fallback; Claude picker adds Haiku 5.5,
+and the installed CLI catalog (verified 2026-11-01 against codex-cli 0.166.0
+and grok 1.0.70; codex's `gpt-5.5` retired from the live catalog on 2026-10-14 and is no longer in the fallback; Claude picker adds Haiku 5.5,
 released 2026-10-07).
 Model access depends on the account and client; select an available model on
 older or company-managed installations. Existing saved model choices are retained. Pointing a
@@ -1809,7 +1809,7 @@ session toggle, not a Cozter command or a selectable `*-fast` model ID. Llama,
 Z.ai, and Meta Model API discover models live from their configured HTTP
 endpoints.
 
-Antigravity CLI uses the official `agy` executable, verified against `1.4.6`.
+Antigravity CLI uses the official `agy` executable, verified against `1.4.12`.
 Run `agy` once to finish native Google sign-in, then choose `/agent` →
 `antigravity_cli`. The model picker reads the signed-in account's `agy models`
 catalog and refreshes it after 60 seconds. It includes Argon Low, Medium,
@@ -1911,7 +1911,7 @@ those calls are also denied explicitly.
 `antigravity_cli` uses `--dangerously-skip-permissions --sandbox=false` for
 `full`, and native `--mode auto` for `auto`. Its planning mode is not a
 permission boundary, and enforced per-launch read-only/no-tools policies
-have not been verified in `1.4.6`. Cozter therefore refuses `confirm`/`deny`
+have not been verified in `1.4.12`. Cozter therefore refuses `confirm`/`deny`
 Antigravity launches, excludes it from summary selection, and does not use it
 for restricted parallel helpers. It remains available for direct tasks and
 Flexible owners with `full`/`auto`; choose another supported backend for
@@ -1978,7 +1978,7 @@ before the child reads stdin, so captured startup output cannot deadlock
 prompt transfer. Foreground Copilot workers use a persistent private CLI home
 owned by their Cozter conversation and isolated native identity. Its session
 history survives completed jobs and later turns, and can be inspected through
-Copilot with that home selected. Cozter passes `--no-remote-export`, so these
+Copilot with that home selected. Cozter passes `--sync-session=off`, so these
 local sessions are not exported to GitHub web and mobile. Internal planner,
 merge, and other maintenance calls still use short-lived homes and remain
 stateless. Each private home copies `config.json` and `settings.json` from
@@ -2001,11 +2001,11 @@ Codex uses discovered effort and context-window metadata only while its
 known public models use Cozter's built-in metadata and a previously discovered
 private model has no inferred context window, so the `/compact` message-
 interval safeguard applies. An explicit `model_context_windows` entry remains
-authoritative. The Codex fallback was verified on 2026-10-25 against
-codex-cli 0.164.0 and the [official model guide](https://learn.chatgpt.com/docs/models).
-It includes `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, and
+authoritative. The Codex fallback was verified on 2026-11-01 against
+codex-cli 0.166.0 and the [official model guide](https://learn.chatgpt.com/docs/models).
+It includes `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6.1-terra`, `gpt-6-sol`, `gpt-6-luna`, and
 the GPT-5.6 Sol/Terra/Luna family. The installed CLI advertises a 500K
-active window for `gpt-6.1-sol` and 272K for the other six; its larger optional maximum does not determine
+active window for `gpt-6.1-sol` and `gpt-6.1-terra` and 272K for the other six; its larger optional maximum does not determine
 Cozter's compaction threshold. Hidden and retired entries are excluded.
 Grok's published `grok-4.7`, `grok-4.7-build-fast`,
 `grok-4.6`, and `grok-4.5` IDs use a 500K-token

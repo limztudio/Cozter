@@ -244,7 +244,7 @@ class CopilotParseTests(unittest.TestCase):
         self.backend = CopilotBackend()
 
     def test_current_cli_nested_assistant_message(self) -> None:
-        """Copilot CLI 1.0.70 wraps final output under ``data.content``."""
+        """Copilot CLI 1.0.105 wraps final output under ``data.content``."""
         event = {
             "type": "assistant.message",
             "data": {"content": "answer"},

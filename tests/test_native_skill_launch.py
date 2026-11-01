@@ -28,7 +28,7 @@ class NativeSkillLaunchTests(unittest.IsolatedAsyncioTestCase):
                 self.assertNotEqual(env["COPILOT_HOME"], str(home))
                 self.assertEqual(env["COPILOT_SKILLS_DIRS"].split(","), [str(existing), str(home / "skills")])
                 self.assertIn("--yolo", launch.call_args.args[0])
-                self.assertIn("--no-remote-export", launch.call_args.args[0])
+                self.assertIn("--sync-session=off", launch.call_args.args[0])
                 await backend.cleanup_process(process)
 
     def test_personal_skill_directory_is_not_duplicated(self):

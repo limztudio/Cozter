@@ -495,7 +495,7 @@ class BackendPermissionCommandTests(unittest.TestCase):
         for approval in ("full", "auto", "confirm", "deny"):
             with self.subTest(approval=approval):
                 self.assertIn(
-                    "--no-remote-export", self._copilot_command(approval),
+                    "--sync-session=off", self._copilot_command(approval),
                 )
 
     def test_claude_effort_matches_selected_model_capabilities(self) -> None:
@@ -866,6 +866,10 @@ warning: ignored after the catalog
         )
         self.assertEqual(
             backend.effort_levels_for_model("gpt-6-astra"),
+            ("low", "medium", "high", "xhigh", "max", "ultra"),
+        )
+        self.assertEqual(
+            backend.effort_levels_for_model("gpt-6.1-terra"),
             ("low", "medium", "high", "xhigh", "max", "ultra"),
         )
         self.assertEqual(
@@ -1382,7 +1386,7 @@ warning: ignored after the catalog
         command = popen.call_args.args[0]
         self.assertIn("--acp", command)
         self.assertIn("--stdio", command)
-        self.assertIn("--no-remote-export", command)
+        self.assertIn("--sync-session=off", command)
         self.assertNotIn("help", command)
         sent = [
             json.loads(call.args[0])
@@ -1867,7 +1871,7 @@ class CopilotPromptStdinTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(received["home"], home)
                 self.assertNotIn("-p", received["args"])
                 self.assertIn("--available-tools", received["args"])
-                self.assertIn("--no-remote-export", received["args"])
+                self.assertIn("--sync-session=off", received["args"])
             finally:
                 if process.returncode is None:
                     process.kill()
