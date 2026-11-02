@@ -1529,34 +1529,40 @@ turn or another router call. They cannot change files or run builds and tests.
 The owner assesses their findings, makes the changes, and verifies completion.
 Independent consultations run in parallel when their backends enforce read-only
 access, within `flexible_max_parallel_workers`; other consultations run serially.
-Advice is optional: routine work starts directly with its owner, and design work
-can go straight to a high owner when reasoning and implementation belong together.
-There is no fixed high-to-low pipeline or required tier mix.
+Advice is optional: routine work starts directly with its owner, and work requiring
+high reasoning can go straight to a high owner for investigation and implementation.
+New owner and specialist choices target **60% low, 30% mid, and 10% high**
+across the workload. These are soft routing targets: the planner chooses the
+lowest capable tier for the actual remaining work, with the lower tier preferred
+when two adjacent tiers both fit. They do not impose per-job quotas or random
+selection. Existing owners retain their tasks and sessions.
 
 Low is the default for bounded coding, debugging, refactoring, test repairs,
 configuration, documentation, and verification. A low owner can inspect,
 implement, and verify a cohesive change across several files using existing
 patterns. Unfamiliar files alone can start with scoped low inspection and continue
-in that owner when the path becomes clear. Mid handles involved non-routine work
-with an understood approach and several clear constraints. High is preferred
-for uncertain non-routine diagnosis, approach decisions, cross-component
-contracts, recurring defects, coupled refactors, difficult algorithms,
-concurrency, and performance/correctness tradeoffs. One meaningful uncertainty
-or consequential decision is enough; when mid and high both look plausible,
-choose high. Routing aims to reduce total diagnosis and rework rather than
-minimize the cost of one call. Neither exceptional difficulty, a failed
-lower-tier attempt, nor an already-known root cause is required.
+in that owner when the path becomes clear. Mid handles involved non-routine
+implementation, diagnosis, and design with several constraints. It can investigate
+uncertain causes, compare approaches, and carry cross-component contracts through
+implementation and verification. High is reserved for difficult reasoning with
+deeply coupled constraints, competing explanations that focused investigation
+cannot readily distinguish, subtle concurrency or correctness proofs, and
+difficult algorithmic tradeoffs that low/mid are unlikely to resolve efficiently.
+An unknown cause, design decision, recurring defect, or cross-component scope
+alone does not require high. A request that establishes concrete difficult
+reasoning can still go directly to high without a failed lower-tier attempt.
 File counts, long commands, and words such as "all" or
 "fix" do not alone require mid/high. An empty or malformed plan keeps the full
 request with a low owner, with focused advice and evidence-driven escalation
 available. Continuations retain the owner and saved evidence for unfinished work.
 
 While working, a parent can borrow another tier for a focused read-only question.
-High can ask low to inspect existing logs or metadata; low or mid can consult high
-early about design, competing causes, or an invariant before speculative edits.
-A low/mid owner should prefer this consultation when a consequential decision
-or uncertain non-routine cause emerges, before spending more turns on edits.
-No failed attempt is needed for consultation. The parent pauses, receives the findings, and
+Helpers follow the same 60/30/10 target and lowest-capable-tier policy. High can
+ask low to inspect existing logs or metadata; low can consult mid for involved
+diagnosis or design. High advice is reserved for concrete difficult reasoning
+beyond low/mid. Add helpers only when their findings would materially reduce
+diagnosis or rework. No failed attempt is needed for consultation.
+The parent pauses, receives the findings, and
 continues the original task with its own model, effort, permissions, and ownership
 of edits and verification. Helpers use the requested tier's configured model and
 effort with restricted permissions. They cannot write, launch builds, publish,
@@ -1626,9 +1632,9 @@ The grading rubric the planner is held to:
 
 | Tier | When | Example |
 |---|---|---|
-| `low` | Default for bounded implementation, debugging, refactoring, test repairs, and verification using existing patterns | Diagnose a module bug, repair it across related files, and verify the regression |
-| `mid` | Involved non-routine work with an understood approach and several clear constraints | Implement an established cache migration design across its affected interfaces |
-| `high` | Preferred for uncertain non-routine causes, approach decisions, cross-component contracts, recurring defects, and coupled behavior; choose high when mid/high are both plausible | Diagnose a recurring session/queue failure and implement its fix, or advise a low owner before speculative edits |
+| `low` | 60% target: bounded implementation, debugging, refactoring, test repairs, and verification using existing patterns | Diagnose a module bug, repair it across related files, and verify the regression |
+| `mid` | 30% target: involved implementation, diagnosis, and design with several constraints | Investigate a cache migration failure, choose a repair, and verify its affected interfaces |
+| `high` | 10% target: concrete difficult reasoning with deeply coupled constraints or uncertainty beyond low/mid | Resolve a subtle concurrency failure requiring a new correctness argument, or advise its owner on that specific question |
 
 Each tier carries its own agent, model and reasoning effort, so tiers can straddle
 backends — a local `llama` for the easy parts, `claude_code` on `opus` for

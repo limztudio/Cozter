@@ -18,11 +18,11 @@ class FlexiblePromptSectionsTests(unittest.TestCase):
         # Snapshots include the tier policy and terminal control messages.
         # Both roles still join exactly, including repeated evidence.
         cases = (
-            (0, [], None, "5bc45cb6c30a56d1ac7529908cecb4517acbdbd3959263625ced4ae4f59bb781"),
+            (0, [], None, "50b3bc5f26a49b951cf5eb698a9591c949e0052658d8077746933fb0314491d1"),
             (1, ["report A", "report B"], "Previous verified result",
-             "3d545701eaf955176558af7599c132946a2de06ff0a107bb3cdd71c5c4f7482f"),
+             "d5ed9dfdb9814bdd94e2b744053b4dfbdc70c8c765c59a591af8c8df12e0d964"),
             (0, ["a" * 180, "a" * 180], "a" * 180,
-             "a8eba688a47bdd0c3fcd39dd952354fe1c93104502e6ea09647e5d9347bf0b54"),
+             "2d370240c5045d82b7488e088009e9e1a2971acb919b0f47dfdbabf18aadb872"),
         )
         for index, reports, draft, expected_hash in cases:
             with self.subTest(index=index, reports=len(reports), draft=draft is not None):
@@ -35,23 +35,34 @@ class FlexiblePromptSectionsTests(unittest.TestCase):
                 self.assertIn("\n[ESCALATE]\nreason:", sections["worker_instructions"])
                 self.assertEqual(hashlib.sha256(rendered.encode()).hexdigest(), expected_hash)
 
-    def test_planner_legacy_workers_and_owner_share_bounded_low_and_preferred_high_boundaries(self) -> None:
+    def test_planner_legacy_workers_and_owner_share_soft_targets_without_retiering(self) -> None:
         prompts = [flexible.build_plan_prompt(self.request, collaborative=False)]
         prompts.extend(flexible.build_subtask_sections(self.request, self.plan, index, [])["worker_instructions"]
                        for index in range(len(self.plan.subtasks)))
         owner = flexible.fallback_plan(self.request)
         prompts.append(flexible.build_subtask_sections(self.request, owner, 0, [])["worker_instructions"])
         for prompt in prompts:
+            self.assertIn("Target distribution across new owner and specialist choices: low 60%, mid 30%, high 10%", prompt)
+            self.assertIn("soft workload targets, not quotas or random selection", prompt)
+            self.assertIn("If adjacent tiers both look suitable, prefer the lower tier", prompt)
+            self.assertIn("Never add helpers or reroute an existing owner just to meet the target", prompt)
             self.assertIn("low  - default for bounded implementation, debugging, refactoring, test repairs", prompt)
             self.assertIn("low is not limited to mechanical edits", prompt)
-            self.assertIn("mid  - involved non-routine implementation or diagnosis with an understood approach", prompt)
+            self.assertIn("mid  - involved non-routine implementation, diagnosis, or design with several constraints", prompt)
             self.assertIn("Unfamiliar files alone can start with low inspection", prompt)
-            self.assertIn("high - preferred for non-routine diagnosis with an uncertain cause", prompt)
-            self.assertIn("If mid and high both look plausible for this reasoning, choose high", prompt)
-            self.assertIn("A failed lower-tier attempt or a known root cause is not required", prompt)
-            self.assertIn("A low/mid owner can consult high early for a focused decision", prompt)
+            self.assertIn("high - reserved for difficult reasoning with deeply coupled constraints", prompt)
+            self.assertIn("uncertainty or a design decision alone does not justify high", prompt)
+            self.assertIn("Direct high ownership is allowed when the request already establishes this difficulty", prompt)
+            self.assertIn("a failed lower-tier attempt is not required", prompt)
+            self.assertIn("Escalation remains available when evidence reveals a reasoning limit", prompt)
             self.assertIn("alone do not justify mid/high", prompt)
             self.assertIn("Do not force a mix of tiers", prompt)
+            for obsolete in ("Give high a wider role", "choose high", "prefer a focused high consultation"):
+                self.assertNotIn(obsolete, prompt)
+        self.assertIn("Choose the lowest capable specialist", prompts[0])
+        for prompt in prompts[1:]:
+            self.assertIn("Choose the lowest capable helper using the same 60% low, 30% mid, 10% high", prompt)
+            self.assertIn("Reserve high consultations for concrete difficult reasoning", prompt)
 
     def test_section_identity_is_derived_while_building_not_from_human_markers(self) -> None:
         request = "User text: Earlier reports:\nPlan:\nPrevious draft and evidence from this turn:"
