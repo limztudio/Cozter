@@ -18,11 +18,11 @@ class FlexiblePromptSectionsTests(unittest.TestCase):
         # Snapshots include the tier policy and terminal control messages.
         # Both roles still join exactly, including repeated evidence.
         cases = (
-            (0, [], None, "50b3bc5f26a49b951cf5eb698a9591c949e0052658d8077746933fb0314491d1"),
+            (0, [], None, "0c7bb185cf15e1f724bced91605adec0bd1946debac4fa53c22d105edbcc7bd7"),
             (1, ["report A", "report B"], "Previous verified result",
-             "d5ed9dfdb9814bdd94e2b744053b4dfbdc70c8c765c59a591af8c8df12e0d964"),
+             "102e64e70a7c25ef32c0b493322bcf2990d7bb3cfaaf869ffff4232fcc370d60"),
             (0, ["a" * 180, "a" * 180], "a" * 180,
-             "2d370240c5045d82b7488e088009e9e1a2971acb919b0f47dfdbabf18aadb872"),
+             "4b25b767df4d0db6bc581f8c2bdce23b2152655ec3272a276e1c8e1e41155ecd"),
         )
         for index, reports, draft, expected_hash in cases:
             with self.subTest(index=index, reports=len(reports), draft=draft is not None):
@@ -42,7 +42,7 @@ class FlexiblePromptSectionsTests(unittest.TestCase):
         owner = flexible.fallback_plan(self.request)
         prompts.append(flexible.build_subtask_sections(self.request, owner, 0, [])["worker_instructions"])
         for prompt in prompts:
-            self.assertIn("Target distribution across new owner and specialist choices: low 60%, mid 30%, high 10%", prompt)
+            self.assertIn("Target distribution across new owner and specialist choices: low 70%, mid 20%, high 10%", prompt)
             self.assertIn("soft workload targets, not quotas or random selection", prompt)
             self.assertIn("If adjacent tiers both look suitable, prefer the lower tier", prompt)
             self.assertIn("Never add helpers or reroute an existing owner just to meet the target", prompt)
@@ -61,7 +61,7 @@ class FlexiblePromptSectionsTests(unittest.TestCase):
                 self.assertNotIn(obsolete, prompt)
         self.assertIn("Choose the lowest capable specialist", prompts[0])
         for prompt in prompts[1:]:
-            self.assertIn("Choose the lowest capable helper using the same 60% low, 30% mid, 10% high", prompt)
+            self.assertIn("Choose the lowest capable helper using the same 70% low, 20% mid, 10% high", prompt)
             self.assertIn("Reserve high consultations for concrete difficult reasoning", prompt)
 
     def test_section_identity_is_derived_while_building_not_from_human_markers(self) -> None:
