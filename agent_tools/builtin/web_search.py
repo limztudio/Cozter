@@ -109,8 +109,7 @@ class WebSearchTool(AgentTool):
         failures: list[str] = []
         saw_page = False
         try:
-            # Return a usable frontend immediately, even when its sibling is
-            # still connecting or retrying. Cancel/close that request below.
+            # A ready frontend ends the wait; close the rest.
             for completed in asyncio.as_completed(tasks):
                 results, endpoint_failures, page = await completed
                 failures.extend(endpoint_failures)

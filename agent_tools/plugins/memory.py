@@ -133,9 +133,7 @@ def _reload_session(sessions_dir: str, metadata: dict) -> dict:
 def _load_session_file(path: str, session_id: str, *, capture_signature: bool = False) -> dict | None:
     try:
         with open(path, encoding="utf-8", buffering=65536) as file_handle:
-            # Handle metadata avoids two extra Windows path-stat round trips
-            # per transcript. Atomic replacement leaves this read coherent;
-            # a selected reread compares its saved signature with the path.
+            # fstat pair skips extra path stats; reread checks it.
             before = os.fstat(file_handle.fileno()) if capture_signature else None
             raw = json.load(file_handle)
             after = os.fstat(file_handle.fileno()) if capture_signature else None
@@ -499,9 +497,7 @@ class MemoryTool(AgentTool):
             minimum=1,
             maximum=_READ_MESSAGES_MAX,
         )
-        # A full durable id already identifies its file. Reading every other
-        # transcript first makes this bounded operation grow with all history.
-        # Names, prefixes and newest aliases retain the existing resolver.
+        # Full id names its file; skip scan of the rest.
         data = None
         session_id = target.strip()
         if (

@@ -446,7 +446,7 @@ def load_config() -> dict:
         sys.exit(1)
     config_data["max_permission"] = normalized_max_permission
 
-    # Constructor-consumed: normalize so bad JSON can't crash startup.
+    # Normalize so bad JSON can't crash startup.
     for key in (
         "update_check_interval",
         "recent_workspace_limit",

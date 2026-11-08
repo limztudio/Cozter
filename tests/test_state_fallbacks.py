@@ -1512,7 +1512,7 @@ class QueueStateFallbackTests(unittest.TestCase):
                             second_entered_persist.wait(), timeout=1,
                         )
 
-                        # /stop cancels promptly, then waits behind the second barrier to clear durably.
+                        # /stop yields to the barrier before exit.
                         stop_task = asyncio.create_task(
                             bot.cmd_stop(bot.make_context("u1", "chat")),
                         )

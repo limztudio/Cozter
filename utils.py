@@ -954,8 +954,7 @@ async def iter_process_json_events(
                     loop.time() >= post_exit_deadline
                     or post_exit_bytes >= _POST_EXIT_STREAM_DRAIN_BYTES
                 ):
-                    # EOF above still wins at the deadline; a ready event must
-                    # obey both limits just like a stalled inherited pipe.
+                    # Same cap for stalled EOF and live pipe.
                     await _abandon_post_exit_stream()
                     return
             consumer_started = loop.time()

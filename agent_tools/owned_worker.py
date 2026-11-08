@@ -29,9 +29,7 @@ async def run_owned_worker(
     caller = asyncio.current_task()
     if caller is not None and caller.cancelling():
         raise asyncio.CancelledError
-    # A direct executor Future also survives asyncio.run's blanket cancellation
-    # of child Tasks during shutdown; cancelling a to_thread Task would lose
-    # ownership of its still-running executor operation.
+    # Executor outlives task cancel; keep its owned op.
     worker = asyncio.get_running_loop().run_in_executor(
         None, copy_context().run, partial(operation, *args, **kwargs),
     )

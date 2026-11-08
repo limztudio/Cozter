@@ -13,9 +13,7 @@ from Cozter.agent_tools.plugins import calculator, memory
 
 class CalculatorIntermediateBudgetTests(unittest.IsolatedAsyncioTestCase):
     async def test_product_chain_stops_at_first_over_budget_intermediate(self) -> None:
-        # Each power alone is within the existing 50,000-digit magnitude
-        # policy. Previously multiplication grew four million digit integers
-        # and blocked the event loop for seconds before output conversion failed.
+        # Big powers pass alone; chained ones fail fast.
         expression = "*".join(["99999**9999"] * 80)
         operation = mock.Mock(wraps=calculator._guarded_multiply)
         with mock.patch.dict(calculator._BIN_OPS, {ast.Mult: operation}):

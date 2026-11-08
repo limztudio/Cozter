@@ -1343,9 +1343,7 @@ def _signal_rich_text_chunks(
     ranges = text_chunk_ranges(body, limit)
     if len(ranges) == 1:
         return [(body, _signal_style_strings_for_chunk(body, spans, 0, len(body)))]
-    # Preserve the renderer's original (including nested/postorder) span order
-    # while visiting only chunks each span actually overlaps. Scanning every
-    # span again for every chunk was quadratic for large formatted replies.
+    # Keep span order; touch only hit chunks.
     chunk_starts = [start for start, _end in ranges]
     chunk_ends = [end for _start, end in ranges]
     chunk_spans: list[list[tuple[int, int, str]]] = [[] for _ in ranges]

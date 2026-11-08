@@ -270,8 +270,7 @@ class NativeCliContinuationTests(unittest.IsolatedAsyncioTestCase):
                 async with self.scope(backend, model) as record:
                     await record.save(native_session_id=_SID, native_resume_attempted=True,
                                       native_tools_started=False)
-                    # A wrong ID, quoted text, generic provider error or authentication failure
-                    # must not authorize a fresh run.
+                    # Wrong IDs or provider errors allow no fresh run.
                     for message in (f"No session found with ID: {_OTHER_SID}",
                                     f"Tool said: No session found with ID: {_SID}",
                                     "Provider unavailable", "Authentication failed"):

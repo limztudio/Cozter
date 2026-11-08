@@ -2615,11 +2615,7 @@ async def _run_flexible(
     signature = request_signature(original_request, injected)
     folded_signatures = []
     if injected:
-        # BotPlatform._run_turn moves accepted guidance into its canonical
-        # request after an allowance ends. These are its two exact renderings:
-        # normal checkpoint additions, or full session recovery when additions
-        # were clipped. Record only proven equivalents; never parse or normalize
-        # arbitrary user text, whitespace, message order, or requested settings.
+        # Both renderings of added guidance; keep proven forms only.
         folded_signatures = sorted({
             request_signature(original_request + "".join(
                 "\n\n[Added while working]:\n" + addition for addition in injected if addition
@@ -3371,10 +3367,7 @@ async def _run_flexible(
             end = admitted
         earlier = list(reports)
         if any(not worker_outputs.get(str(index), {}).get("complete") for index in range(done, end)):
-            # Each actual worker wave selects skills from disk again. A long
-            # preceding worker may have outlived edits to native/shared skills.
-            # Parallel readers share one fresh snapshot, rather than scanning
-            # and synchronizing the same roots once per sibling.
+            # Share snapshot; skills may have changed.
             worker_catalog = await skills.refresh(workspace_path)
             native_skills_catalog = skills.catalog_prompt(worker_catalog, cli=True)
         try:

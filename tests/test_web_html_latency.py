@@ -60,10 +60,7 @@ class WebHtmlScanTests(unittest.TestCase):
         self.assertNotIn("later.example", result)
 
     def test_five_megabyte_malformed_documents_finish_in_killable_process(self):
-        # A child process bounds the regression test itself if a future change
-        # reintroduces a regex that holds the GIL for minutes on these inputs.
-        # Ten seconds includes Python/import startup and permits slow hosts;
-        # this is intentionally not a subsecond wall-clock performance test.
+        # Child bounds this test; slow hosts get 10s.
         script = """
 import json
 from Cozter.agent_tools.html_scan import first_title_contents

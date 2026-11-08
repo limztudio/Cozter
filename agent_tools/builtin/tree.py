@@ -104,10 +104,7 @@ class TreeTool(AgentTool):
             lines.append(f"{indent}{name}{'/' if is_dir else ''}")
             if is_dir and level + 1 < max_depth:
                 if workspace_root is not None:
-                    # Windows junctions can be directories even with
-                    # follow_symlinks=False. Keep their local entry visible,
-                    # but resolve each recursion target against the one
-                    # canonical workspace authority captured for this call.
+                    # Show local entries; check recursion targets.
                     try:
                         if os.path.commonpath((os.path.realpath(entry_path), workspace_root)) != workspace_root:
                             continue

@@ -891,7 +891,7 @@ async def main() -> None:
 
 def run() -> None:
     setup_logging()
-    # faulthandler first: emits where a C wedge stuck.
+    # Dump C backtraces first on hard stalls.
     _enable_faulthandler()
     try:
         asyncio.run(main())

@@ -410,9 +410,7 @@ async def execute_tool(
                 workspace_path, kind=f"tool:{name}", **({"details": details} if details else {}),
             )
             with tool_permission_scope(approval), supervision.operation_scope(ticket):
-                # Keep the real tool owner reachable throughout cancellation.
-                # wait() never forwards caller cancellation to that owner, so
-                # this layer can cancel it once and settle it explicitly.
+        # Keep owner live; wait() drops caller cancel here.
                 tool_task = asyncio.create_task(tool.run(workspace_path, args))
                 try:
                     # Grep owns a killable subprocess. Other readers use threads,
@@ -491,9 +489,7 @@ async def execute_tool(
             isinstance(declared_limit, int) and not isinstance(declared_limit, bool)
             and declared_limit > 0
         ):
-            # Plugin code explicitly opts in; arguments never choose this cap.
-            # Keep undeclared/replacement plugins at the default and bound even
-            # an incorrectly configured plugin to the largest builtin budget.
+            # Args never set this cap; clamp bad plugin values.
             result_limit = min(declared_limit, 64 * 1024)
     if tool is not None and not getattr(tool, "is_plugin", True):
         result_limit = max(result_limit, {

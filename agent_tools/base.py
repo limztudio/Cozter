@@ -157,9 +157,7 @@ class AgentTool(ABC):
         import asyncio
         import json
 
-        # CLI backends capture these streams as UTF-8. Windows redirected
-        # stdout otherwise uses the locale encoding, which can fail after a
-        # successful tool call when a path or result contains Unicode.
+        # UTF-8 for CLI backends; locale breaks on Unicode paths.
         for stream in (sys.stdout, sys.stderr):
             reconfigure = getattr(stream, "reconfigure", None)
             if callable(reconfigure):
@@ -610,10 +608,7 @@ def iter_workspace_files(
             root_rel = os.path.relpath(fpath, abs_root).replace(os.sep, "/")
             if not _match_glob_parts(pattern_parts, _glob_segments(root_rel)):
                 continue
-            # Resolve every matching target, including symlinks, against the
-            # workspace authority captured for this scan. Re-resolving that
-            # canonical root for each file adds Windows path-handle calls and
-            # could silently move the authority if the root is replaced.
+            # Check each link against the scan root.
             if not full_access:
                 try:
                     if os.path.commonpath((os.path.realpath(fpath), abs_ws)) != abs_ws:

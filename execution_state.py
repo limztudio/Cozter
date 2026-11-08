@@ -248,10 +248,7 @@ class ExecutionRecord:
         operation = self._reserve_operation()
 
         async def snapshot_and_write() -> None:
-            # HTTP histories can be several MiB. Keep their JSON validation
-            # and copy out of event parsing/status dispatch. The owned task
-            # also ensures cancellation cannot drop a completed tool result
-            # while its snapshot is being prepared.
+            # Big histories copy off-loop; keep cancel safe.
             copied = await asyncio.to_thread(_copy_json_values, values)
             self._set_copied(copied, operation)
             await self.flush()

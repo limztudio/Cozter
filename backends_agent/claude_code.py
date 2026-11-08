@@ -44,10 +44,7 @@ from ..utils import (
 logger = logging.getLogger(__name__)
 
 
-# Claude Code effort support differs from the API (notably Opus 4.5
-# and pre-5.5 Haiku); see model-config#adjust-effort-level docs.
-# Opus/Sonnet 4.6 offer four levels; only Haiku 5.5 (2026-10-07) has
-# adaptive reasoning among the listed Haiku pins.
+# Effort levels vary by model; see model-config docs.
 _FOUR_LEVEL_EFFORT_MODELS = frozenset({
     "claude-opus-4-6",
     "claude-sonnet-4-6",

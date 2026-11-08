@@ -285,10 +285,7 @@ class CalculatorTool(AgentTool):
 
     async def run(self, workspace_path: str, args: dict) -> str:
         del workspace_path
-        # Valid large-integer math can occupy hundreds of milliseconds. Keep
-        # status dispatch and independent tool calls progressing between its
-        # bounded C operations. Cancellation may leave only pure CPU work
-        # finishing; this helper never performs I/O or changes shared state.
+        # Big math blocks the loop; run it off-loop.
         return await asyncio.to_thread(_calculate, args)
 
     def summarize(self, args: dict) -> str:

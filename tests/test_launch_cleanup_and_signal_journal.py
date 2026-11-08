@@ -126,7 +126,7 @@ class SignalMalformedJsonTests(unittest.IsolatedAsyncioTestCase):
         reader.feed_eof()
         response = asyncio.get_running_loop().create_future()
         bot._jsonrpc_pending["next"] = response
-        # EOF cleanup is unrelated to decoding and must not launch reconnection.
+        # EOF cleanup starts no reconnect.
         with (mock.patch.object(bot, "_schedule_jsonrpc_reconnect"),
               self.assertLogs(signal.logger, "WARNING")):
             await bot._jsonrpc_reader_loop(reader, mock.Mock())

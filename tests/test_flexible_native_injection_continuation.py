@@ -41,8 +41,7 @@ class FlexibleNativeInjectionContinuationTests(unittest.IsolatedAsyncioTestCase)
                 summary = SimpleNamespace(name="summary")
 
                 async def drive(real_backend, path, prompt, selected_model, approval, **kwargs):
-                    # Keep Flexible's real worker scope, _drive_backend wrapper,
-                    # native record and launch argv construction in this test.
+                    # Keep real worker scope and argv build here.
                     record = execution_state.current_run()
                     self.assertIsNotNone(record)
                     record_keys.append(record.key)
@@ -104,8 +103,7 @@ class FlexibleNativeInjectionContinuationTests(unittest.IsolatedAsyncioTestCase)
                         saved = await execution_state.record("flexible_plan")
                         self.assertTrue(saved.get("active"))
                         self.assertEqual(saved.get("cursor"), 0)
-                    # A distinct Execution object simulates the next durable
-                    # queue allowance after BotPlatform folds accepted input.
+                    # New run for next folded queue allowance.
                     async with execution_state.execution_scope(workspace, "durable-job", folded):
                         result, restarting = await run(folded, [])
 

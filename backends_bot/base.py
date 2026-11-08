@@ -5407,8 +5407,7 @@ class BotPlatform(ABC):
                     lock.release()
                 continue
 
-            # Popping transfers cache ownership to this consumer before its
-            # first yield; an idempotent admission must not republish it.
+            # Pass cache to this reader; admit once only.
             self._active_queue_entries[uid] = entry_id
             self._running_tasks[uid] = asyncio.current_task()
             try:

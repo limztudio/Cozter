@@ -775,10 +775,7 @@ class OpenAIChatBackend(Backend):
 
         async def save_pending_results() -> None:
             if execution is not None:
-                # The assistant intent already owns a durable private copy of
-                # this unchanged history, identity, and prompt digest. Update
-                # only outcomes during the batch; ExecutionRecord still writes
-                # the complete atomic snapshot before the next tool may start.
+            # Hold history copy; write it before next tool.
                 await execution.save(http_pending_results=dict(pending_results))
 
         def append_message(message: dict[str, Any]) -> bool:
