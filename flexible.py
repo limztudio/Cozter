@@ -26,8 +26,8 @@ TIERS: tuple[str, ...] = ("low", "mid", "high")
 FALLBACK_TIER = "low"
 
 TIER_DESCRIPTIONS = {
-    "low": "70% target: bounded coding, debugging, refactoring, and verification",
-    "mid": "20% target: involved implementation, diagnosis, and design with several constraints",
+    "low": "60% target: bounded coding, debugging, refactoring, and verification",
+    "mid": "30% target: involved implementation, diagnosis, and design with several constraints",
     "high": "10% target: difficult reasoning with deeply coupled constraints or uncertainty",
 }
 
@@ -42,7 +42,7 @@ JUDGE_MAX_CONTINUES = 3
 
 # Shared by the planner and workers choosing focused help.
 _RUBRIC = (
-    "Target distribution across new owner and specialist choices: low 70%, mid 20%,"
+    "Target distribution across new owner and specialist choices: low 60%, mid 30%,"
     " high 10%. These are soft workload targets, not quotas or random selection."
     " Choose the lowest tier capable of finishing reliably with the fewest total"
     " reasoning passes. If adjacent tiers both look suitable, prefer the lower"
@@ -98,7 +98,7 @@ _ESCALATION_RULES = (
 _LEASE_RULES = (
     "For a focused analysis or read-only inspection question, you may borrow a"
     " helper from any OTHER tier without handing over your whole obligation."
-    " Choose the lowest capable helper using the same 70% low, 20% mid, 10% high"
+    " Choose the lowest capable helper using the same 60% low, 30% mid, 10% high"
     " workload target. High can use low for routine inventory; low can consult mid"
     " for involved diagnosis or design. Reserve high consultations for concrete"
     " difficult reasoning that low/mid are unlikely to resolve efficiently. No"
@@ -179,7 +179,7 @@ _PLANNER_RULES = (
     " Do not drop difficult work merely because a specialist is unavailable.\n"
     "- Progress is Thinking... status only (done/total may grow as"
     " follow-ups join); never a chat reply; DONE ping only at the end.\n"
-    "- Grade the actual remaining reasoning using the 70% low, 20% mid, 10% high"
+    "- Grade the actual remaining reasoning using the 60% low, 30% mid, 10% high"
     " workload target. Low owns bounded coding and verification; mid owns involved"
     " diagnosis, design, and implementation. Reserve high for concrete difficult"
     " reasoning beyond low/mid; direct high does not require a failed attempt.\n"
