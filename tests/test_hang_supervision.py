@@ -418,7 +418,7 @@ class HangSupervisionAsyncTests(unittest.IsolatedAsyncioTestCase):
         finish, reviewed, review_applied = self.event(), self.event(), self.event()
         ticket = self.ticket()
         ticket.started -= 3600
-        ticket.last_review = 0
+        ticket.last_review = ticket.started - 3600 - 60
         ticket.progress_at = supervision.time.monotonic()
         post_review_observations = 0
 
