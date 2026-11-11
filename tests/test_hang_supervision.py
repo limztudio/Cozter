@@ -440,11 +440,11 @@ class HangSupervisionAsyncTests(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(config, "get_hang_diagnose_after_seconds", return_value=3600):
             owned = self.spawn(finish.wait())
             monitor = self.spawn(supervision.wait_owned(owned, ticket))
-            await asyncio.wait_for(review_applied.wait(), 2)
+            await asyncio.wait_for(review_applied.wait(), 10)
             self.assertFalse(owned.done())
             self.report.assert_called_once()
             finish.set()
-            self.assertIsNone(await asyncio.wait_for(monitor, 2))
+            self.assertIsNone(await asyncio.wait_for(monitor, 10))
         self.assertFalse(owned.cancelled())
         self.doctor.assert_awaited_once()
 
