@@ -1,6 +1,6 @@
 """Meta Model API backend: OpenAI-compatible cloud API for the Muse models.
 
-Meta's Model API serves the Muse families (Muse Wonder and Muse Spark chat
+Meta's Model API serves the Muse families (Muse Wonder, Muse Ember, and Muse Spark chat
 models) through an OpenAI-compatible endpoint with Bearer auth. It reuses
 the shared :class:`OpenAIChatBackend` loop; this module supplies only Meta's
 specifics - the Model API endpoint, the Authorization header built from
@@ -35,9 +35,10 @@ class _MetaModelSpec(NamedTuple):
     supports_max: bool
 
 
-# https://dev.meta.ai/docs/models and /docs/reasoning (2026-10-21).
+# https://dev.meta.ai/docs/models and /docs/reasoning (2026-11-11).
 _FALLBACK_MODEL_SPECS = (
     _MetaModelSpec("muse-wonder-1.0", 1_048_576, True),
+    _MetaModelSpec("muse-ember-1.0", 1_048_576, True),
     _MetaModelSpec("muse-spark-1.3", 1_048_576, True),
     _MetaModelSpec("muse-spark-1.3-contributor", 1_048_576, False),
     _MetaModelSpec("muse-spark-1.2", 1_048_576, False),

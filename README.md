@@ -69,7 +69,7 @@ works across every backend.
     (the default summary model), plus documented Coding Plan `[1m]` pins);
     OpenAI-compatible,
     so it shares the in-process loop — set `zai_api_key` in config
-  - `meta` — Meta's Model API (Muse Wonder and Spark models: `muse-wonder-1.0`, `muse-spark-1.3`,
+  - `meta` — Meta's Model API (Muse Wonder, Ember, and Spark models: `muse-wonder-1.0`, `muse-ember-1.0`, `muse-spark-1.3`,
     `muse-spark-1.2`, `muse-spark-1.1`, …); OpenAI-compatible, so it shares
     the in-process loop — set `meta_api_key` in config
 - **Four chat surfaces**, with Telegram, Slack, and Signal runnable together:
@@ -588,7 +588,7 @@ GLM Coding Plan users can instead set it to
 `https://api.z.ai/api/coding/paas/v4`. The normal endpoint's fallback already
 includes `glm-5.3` and multimodal `glm-5.3-flash`/`glm-5.3-flashx`; the Coding Plan fallback
 omits standard-only FlashX and offers the documented `glm-5.3[1m]` and `glm-5.3-flash[1m]` pins.
-`meta_api_key` enables the `meta` backend (Meta Model API — Muse Wonder and Spark).
+`meta_api_key` enables the `meta` backend (Meta Model API — Muse Wonder, Ember, and Spark).
 Get one from the Meta Model API developer console and paste it here (the
 docs also expose it as a `MODEL_API_KEY` environment variable). The backend
 talks to Meta's OpenAI-compatible endpoint at `https://api.meta.ai/v1`;
@@ -599,7 +599,7 @@ Muse Image, Muse Voice Transcribe, and SAM vision segmentation need other endpoi
 and are never
 offered as agent models. Model discovery queries the account's `/models`
 catalog live; the offline fallback lists the published chat models
-(`muse-wonder-1.0`, Spark 1.3/1.2 Standard and Contributor variants, and Spark 1.1).
+(`muse-wonder-1.0`, `muse-ember-1.0`, Spark 1.3/1.2 Standard and Contributor variants, and Spark 1.1).
 The default remains `muse-spark-1.3`, with `muse-spark-1.2` for summary/low tier.
 [Meta's model guide](https://dev.meta.ai/docs/models) lists regional availability;
 catalog visibility alone does not guarantee generation access.
@@ -1674,7 +1674,7 @@ tiers still inherit their existing workspace effort.
 Defaults put all three tiers on `codex` (`gpt-6-luna` / `gpt-6-sol` /
 `gpt-6.1-sol`), with `gpt-6.1-sol` for chat and `gpt-6-luna` for summaries.
 These defaults follow the [current Codex model guidance](https://developers.openai.com/codex/models)
-and the installed CLI catalog (verified 2026-11-08 against codex-cli 0.166.0
+and the installed CLI catalog (verified 2026-11-11 against codex-cli 0.167.0
 and grok 1.0.70; codex's `gpt-5.5` retired from the live catalog on 2026-10-14 and is no longer in the fallback; Claude picker adds Haiku 5.5,
 released 2026-10-07).
 Model access depends on the account and client; select an available model on
@@ -1810,7 +1810,7 @@ choice also uses `auto` until it appears in that workspace's fresh catalog.
 Claude Code has no safe non-interactive account catalog, so it keeps
 a curated list that `extra_models` can extend. Its picker offers standard
 aliases, `sonnet[1m]`/`opus[1m]`, and version pins. The [Claude model guide](https://code.claude.com/docs/en/model-config)
-documents native 1M context for Fable 5/5.1, Opus 4.7+, Sonnet 5+, and
+documents native 1M context for Fable 5.2/5.1/5, Opus 4.7+, Sonnet 5+, and
 Haiku 5.5. Those pins use native capacity without redundant `[1m]` choices;
 Opus/Sonnet 4.6 retain explicit long-context choices. `CLAUDE_CODE_DISABLE_1M_CONTEXT=1`
 caps recognized long-context models at 200K. Bare aliases remain capacity-unknown;
@@ -1820,10 +1820,10 @@ session toggle, not a Cozter command or a selectable `*-fast` model ID. Llama,
 Z.ai, and Meta Model API discover models live from their configured HTTP
 endpoints.
 
-Antigravity CLI uses the official `agy` executable, verified against `1.5.2`.
+Antigravity CLI uses the official `agy` executable, verified against `1.5.4`.
 Run `agy` once to finish native Google sign-in, then choose `/agent` →
 `antigravity_cli`. The model picker reads the signed-in account's `agy models`
-catalog and refreshes it after 60 seconds. It includes Argon Low, Medium,
+catalog and refreshes it after 60 seconds. It includes Carbon and Argon Low, Medium,
 and High when the account offers those variants. Cozter sends one framed
 JSON prompt through file-backed stdin, captures the CLI-assigned conversation
 UUID, and resumes only that UUID with `--conversation`. The same session can
@@ -1922,7 +1922,7 @@ those calls are also denied explicitly.
 `antigravity_cli` uses `--dangerously-skip-permissions --sandbox=false` for
 `full`, and native `--mode auto` for `auto`. Its planning mode is not a
 permission boundary, and enforced per-launch read-only/no-tools policies
-have not been verified in `1.5.2`. Cozter therefore refuses `confirm`/`deny`
+have not been verified in `1.5.4`. Cozter therefore refuses `confirm`/`deny`
 Antigravity launches, excludes it from summary selection, and does not use it
 for restricted parallel helpers. It remains available for direct tasks and
 Flexible owners with `full`/`auto`; choose another supported backend for
@@ -2012,8 +2012,8 @@ Codex uses discovered effort and context-window metadata only while its
 known public models use Cozter's built-in metadata and a previously discovered
 private model has no inferred context window, so the `/compact` message-
 interval safeguard applies. An explicit `model_context_windows` entry remains
-authoritative. The Codex fallback was verified on 2026-11-08 against
-codex-cli 0.166.0 and the [official model guide](https://learn.chatgpt.com/docs/models).
+authoritative. The Codex fallback was verified on 2026-11-11 against
+codex-cli 0.167.0 and the [official model guide](https://learn.chatgpt.com/docs/models).
 It includes `gpt-6.1-sol`, `gpt-6-astra`, `gpt-6.1-terra`, `gpt-6-sol`, `gpt-6-luna`, and
 the GPT-5.6 Sol/Terra/Luna family. The installed CLI advertises a 500K
 active window for `gpt-6.1-sol` and `gpt-6.1-terra` and 272K for the other six; its larger optional maximum does not determine

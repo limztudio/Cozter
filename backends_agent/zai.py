@@ -73,7 +73,7 @@ _CODING_PLAN_FALLBACK_MODELS = tuple(
         *_CODING_PLAN_FALLBACK_MODEL_SPECS,
         *_FALLBACK_MODEL_SPECS,
     )
-    # https://docs.z.ai/guides/vlm/glm-5.3-flash (2026-10-21).
+    # https://docs.z.ai/guides/vlm/glm-5.3-flash (2026-11-11).
     if spec.name != "glm-5.3-flashx"
 )
 _ALL_FALLBACK_MODEL_SPECS = (
