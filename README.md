@@ -1053,6 +1053,7 @@ reserved or unavailable; direct Slack mentions work too, for example
 | `/colony [number\|now]` | Show memory state, set the consolidation interval, or run it now |
 | `/refresh` | Refresh every backend's model catalog in parallel for chat, summaries, and Flexible; preserve selected models, configuration, and native conversations |
 | `/stop` | Cancel the running agent turn and clear queued work |
+| `/pause` | Hold queue drain, scheduler, retries and delivery until next message resumes |
 | `/bg <task>` or `/background <task>` | Start a restart-safe detached task with the selected compatible backend |
 | `/inject <text>` | Add context to the running turn; Cozter abandons its active phase and restarts with it |
 | `/reserve` | Create a recurring scheduled prompt |
@@ -1069,8 +1070,12 @@ also accepts a recent-workspace number directly as `/open 2`.
 If a picker entry is not recognized, Cozter keeps the picker open and asks
 again; use `/cancel` to leave it. An unrecognized slash command (for
 example `/nope`) replies `Unknown command: /nope` followed by the sorted
-list of available commands (`/agent /bg /cancel …`), so the valid names
+list of available commands (`/agent /bg /cancel /pause …`), so the valid names
 are visible without guessing.
+
+`/pause` holds queue drain, scheduled prompts, prerequisite retries and staged
+deliveries for that user. The next text, file or command resumes the held
+work and also runs that new message; `/stop` clears the hold with the rest.
 
 `/context` applies a character budget to each composed turn. Cozter never
 truncates the current user message: it trims saved context first and, if
@@ -2398,7 +2403,7 @@ The runtime contains 81 Python source files, separate from the tests below.
   `.github/workflows/ci.yml`, `.config/config.example.json`,
   `run_cozter.ps1` (the Windows Task Supervisor launcher used by the update
   restart path), `.gitignore`, and this README
-- Tests (198 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 195 `test_*.py` modules:
+- Tests (199 files: `tests/__init__.py`, `tests/conftest.py`, shared `tests/helpers.py`, plus 196 `test_*.py` modules:
   `test_agent_attachments.py`, `test_agent_image_flood.py`, `test_agent_plugins.py`,
   `test_agent_post_turn.py`, `test_agent_process_cleanup.py`, `test_agent_prompt.py`,
   `test_agent_tools.py`, `test_antigravity_capabilities.py`, `test_antigravity_cli_backend.py`,
@@ -2441,7 +2446,7 @@ The runtime contains 81 Python source files, separate from the tests below.
   `test_native_conversation_state.py`, `test_native_current_protocol.py`, `test_native_delta_sync.py`,
   `test_native_hang_recovery.py`, `test_native_launch_contract.py`, `test_native_prompt.py`,
   `test_native_session_turns.py`, `test_native_skill_launch.py`, `test_native_stream_progress.py`,
-  `test_notes_owned_worker.py`, `test_notes_transactions.py`, `test_openai_agent.py`,
+  `test_notes_owned_worker.py`, `test_notes_transactions.py`, `test_openai_agent.py`, `test_pause.py`,
   `test_owned_file_mutations.py`, `test_patch_limit_optimization.py`, `test_planner_context_latency.py`,
   `test_platform_formatting.py`, `test_plugin_cli_unicode.py`, `test_plugin_memory_calculator_performance.py`,
   `test_plugin_parallelism.py`, `test_plugin_result_budgets.py`, `test_prerequisite_checkpoint.py`,

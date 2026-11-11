@@ -769,6 +769,9 @@ class BotPlatform(ABC):
         # An unfinished job needing input blocks every later entry, including
         # scheduled work. Its checkpoint is also retained in the queue file.
         self._paused_jobs: set[str] = set()
+        # Manual hold from /pause. Same drain/scheduler/retry/delivery hold
+        # as _paused_jobs, cleared by resume input or /stop.
+        self._manually_paused: set[str] = set()
         self._pending_input: dict[str, Handler] = {}
         self._scheduler_task: asyncio.Task | None = None
         self._daemon_services_started = False
@@ -992,7 +995,7 @@ class BotPlatform(ABC):
             raise BaseExceptionGroup("Queue consumer cleanup failed", errors)
 
     def _start_queue_drain(self, uid: str) -> asyncio.Task[None] | None:
-        if self._stopping or uid in self._paused_jobs:
+        if self._stopping or uid in self._paused_jobs or uid in self._manually_paused:
             return None
         current = self._queue_drain_tasks.get(uid)
         if current is not None and not current.done():
@@ -1302,6 +1305,8 @@ class BotPlatform(ABC):
         ctx.had_pending = (
             self._pending_input.pop(ctx.user_id, None) is not None
         )
+        if ctx.command is not None and ctx.command.lower() != "pause":
+            self._resume_manual_pause(ctx.user_id)
         await handler(self, ctx)
 
     async def dispatch_text(self, ctx: BotContext) -> None:
@@ -1327,6 +1332,8 @@ class BotPlatform(ABC):
         if pending is not None:
             await pending(ctx)
             return
+        if self._resume_manual_pause(ctx.user_id):
+            await ctx.reply_text("Resumed.")
         await self._ai_chat(ctx)
 
     async def dispatch_file(self, ctx: BotContext) -> None:
@@ -1336,6 +1343,8 @@ class BotPlatform(ABC):
         if ctx.attachment is None:
             return
         self._pending_input.pop(ctx.user_id, None)
+        if self._resume_manual_pause(ctx.user_id):
+            await ctx.reply_text("Resumed.")
         await self._ai_file(ctx)
 
     def _expect_input(self, user_id: str, callback: Handler) -> None:
@@ -1572,7 +1581,9 @@ class BotPlatform(ABC):
                     len(uploads), await self._cancel_attachment_uploads(uid),
                 )
                 was_awaiting = uid in self._awaiting_answer
+                was_manually_paused = uid in self._manually_paused
                 self._awaiting_answer.discard(uid)
+                self._manually_paused.discard(uid)
                 drained: list = []
                 _drain_queue(self._message_queues.get(uid), collect=drained)
                 # Dropped work must not return after restart.
@@ -1583,7 +1594,7 @@ class BotPlatform(ABC):
                 detached_cancelled = await self._cancel_detached_tasks(uid)
             cleared = max(len(drained), persisted, delayed_replies)
             return task_running, bool(
-                was_awaiting or cleared or detached_cancelled
+                was_awaiting or was_manually_paused or cleared or detached_cancelled
                 or cancelled_uploads or launches
             )
         finally:
@@ -2519,6 +2530,25 @@ class BotPlatform(ABC):
             "  /colony now - run consolidation immediately",
         ])
         await ctx.reply_text("\n".join(lines))
+
+    def _holds_queue(self, uid: str) -> bool:
+        return uid in self._paused_jobs or uid in self._manually_paused
+
+    async def cmd_pause(self, ctx: BotContext) -> None:
+        """Hold all work until next user message resumes it."""
+        self._pending_input.pop(ctx.user_id, None)
+        self._manually_paused.add(ctx.user_id)
+        await ctx.reply_text(
+            "Paused. Queue drain, scheduler, retries and delivery hold"
+            " until your next message, file or command resumes."
+        )
+
+    def _resume_manual_pause(self, uid: str) -> bool:
+        if uid not in self._manually_paused:
+            return False
+        self._manually_paused.discard(uid)
+        self._start_queue_drain(uid)
+        return True
 
     async def cmd_stop(self, ctx: BotContext) -> None:
         task_running, cancelled_work = await self._cancel_user_work(ctx.user_id)
@@ -3466,6 +3496,8 @@ class BotPlatform(ABC):
         """
         record_id = record["id"]
         uid = record["user_id"]
+        if uid in self._manually_paused:
+            return False
         # Re-check under the lock before sending.
         async with self._recovery_delivery_lock(uid), self._reply_delivery_lock(uid):
             record = await self._get_reply_delivery_record(record_id)
@@ -3533,7 +3565,8 @@ class BotPlatform(ABC):
 
         Fixed workers bound both live operations and task creation. A failed
         staged reply returns False, holding later replies for that same owner
-        until recovery, while other owners can continue immediately.
+        until recovery, while other owners can continue immediately. Manually
+        paused owners keep their records durable until resume input arrives.
 
         This is one bounded parallel pass. Its next pass waits for the slowest
         owner; existing provider/platform operation deadlines bound that wait.
@@ -3541,6 +3574,8 @@ class BotPlatform(ABC):
         """
         grouped: dict[str, list[dict]] = {}
         for record in records:
+            if record["user_id"] in self._manually_paused:
+                continue
             grouped.setdefault(record["user_id"], []).append(record)
         owners = iter(grouped.values())
 
@@ -3798,6 +3833,8 @@ class BotPlatform(ABC):
         for uid, raw_entries in data.items():
             if uid in self._pending_reply_delivery_users:
                 continue
+            if uid in self._manually_paused:
+                continue
             entries = self._queue_entries(raw_entries)
             if not entries:
                 continue
@@ -4014,6 +4051,8 @@ class BotPlatform(ABC):
 
     async def _deliver_current_detached_task(self, record: dict, message: str) -> None:
         uid = record["user_id"]
+        if uid in self._manually_paused:
+            return
         async with self._recovery_delivery_lock(uid), self._detached_task_delivery_lock(uid):
             if uid in self._pending_reply_delivery_users:
                 return  # Its staged payload remains durable for the next poll.
@@ -4233,6 +4272,23 @@ class BotPlatform(ABC):
         to_fire: list[tuple[str, str, dict, datetime]] = []
         for uid, ws in workspace.iter_current_workspaces(self.platform_id):
             if not os.path.isdir(ws):
+                continue
+            if uid in self._manually_paused:
+                try:
+                    records = self._platform_schedules(ws, uid)
+                    for sched in records:
+                        schedule_id = sched.get("id")
+                        if not isinstance(schedule_id, str) or not schedule_id:
+                            continue
+                        slot = schedules.most_recent_slot(sched, now)
+                        if slot is None:
+                            continue
+                        occurrence = ScheduledOccurrence(ws, uid, schedule_id, slot.isoformat())
+                        receipt = watermarks.get(occurrence.key())
+                        if receipt is not None:
+                            await self._project_schedule_receipt(uid, ws, schedule_id, receipt)
+                except Exception:
+                    logger.exception("Could not inspect schedules for user=%s workspace=%s", uid, ws)
                 continue
             try:
                 records = self._platform_schedules(ws, uid)
@@ -4463,7 +4519,7 @@ class BotPlatform(ABC):
             return
         lock = self._ensure_task_lock(uid)
         queued = (lock.locked() or self._update_restart_pending
-                  or uid in self._pending_reply_delivery_users or uid in self._paused_jobs)
+                  or uid in self._pending_reply_delivery_users or self._holds_queue(uid))
         try:
             result = await self._admit_queue_entry(uid, text, chat_id, generation)
         except QueueCapacityError:
@@ -5357,7 +5413,7 @@ class BotPlatform(ABC):
                 break
             if self._update_restart_pending:
                 break
-            if uid in self._paused_jobs:
+            if uid in self._paused_jobs or uid in self._manually_paused:
                 break
             if lock.locked():
                 break
@@ -5429,12 +5485,12 @@ class BotPlatform(ABC):
             except Exception as exc:
                 logger.exception("Queued AI chat failed")
                 await self._pause_job_after_failure(uid, entry_id, msg_chat_id, exc)
-                if self._update_restart_pending or uid in self._paused_jobs:
+                if self._update_restart_pending or self._holds_queue(uid):
                     break
             else:
                 if completed is False:
                     await self._retain_job_entry(uid, entry_id)
-                    if self._update_restart_pending or uid in self._paused_jobs:
+                    if self._update_restart_pending or self._holds_queue(uid):
                         break
                     continue  # guidance arrived while the pause notice was sending
                 await self._persist_complete(uid, entry_id)
@@ -5515,6 +5571,7 @@ def _build_command_registry() -> dict[str, Handler]:
         "sessions":     BotPlatform.cmd_sessions,
         "colony":       BotPlatform.cmd_colony,
         "stop":         BotPlatform.cmd_stop,
+        "pause":        BotPlatform.cmd_pause,
         "bg":           BotPlatform.cmd_background,
         "background":   BotPlatform.cmd_background,
         "inject":       BotPlatform.cmd_inject,
