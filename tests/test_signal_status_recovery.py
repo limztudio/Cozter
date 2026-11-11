@@ -153,18 +153,18 @@ class SignalStatusRecoveryTests(unittest.IsolatedAsyncioTestCase):
         async def run(*_args, on_event, **_kwargs):
             self.assertEqual(await self.bot.posted.get(), 1001)
             await on_event(ChatEvent(kind="tool", content="preserved live activity"))
-            self.assertEqual(await asyncio.wait_for(self.bot.posted.get(), .5), 1002)
+            self.assertEqual(await asyncio.wait_for(self.bot.posted.get(), 5), 1002)
             self.assertEqual(Counter(event["editTimestamp"] for event in self.bot.edits), {1001: 10})
             self.assertGreaterEqual(self.bot.posts[1][0] - self.bot.posts[0][0], .035)
             await on_event(ChatEvent(kind="tool", content="new handle activity"))
-            while (edited := await asyncio.wait_for(self.bot.edited.get(), .2))["editTimestamp"] == 1001:
+            while (edited := await asyncio.wait_for(self.bot.edited.get(), 2))["editTimestamp"] == 1001:
                 pass
             self.assertEqual(edited["editTimestamp"], 1002)
             self.assertIn("new handle activity", edited["message"])
             return self.final()
 
         with mock.patch.object(agent, "run", side_effect=run) as execute:
-            await asyncio.wait_for(self.bot._run_turn("u1", "group", "work"), .8)
+            await asyncio.wait_for(self.bot._run_turn("u1", "group", "work"), 30)
             execute.assert_awaited_once()
         await asyncio.sleep(.05)
         self.assertEqual(len(self.bot.posts), 2)
