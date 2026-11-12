@@ -2534,10 +2534,80 @@ class BotPlatform(ABC):
     def _holds_queue(self, uid: str) -> bool:
         return uid in self._paused_jobs or uid in self._manually_paused
 
+    def _requeue_active_entry_for_pause(self, uid: str, entry_id: str) -> None:
+        """Re-queue a frozen active entry in memory from its durable row.
+
+        Synchronous so ``/pause`` can run inside the dispatch while the
+        frozen turn still owns the per-user task lock. Falls back to a
+        prompt-less marker only when the durable row is already gone; the
+        drain loop drops malformed shapes, and resume still clears the
+        hold and restarts the queue.
+        """
+        try:
+            data = self._read_queue_file()
+        except Exception:
+            logger.exception(
+                "Could not read queue file for paused user=%s", uid,
+            )
+            return
+        stored = next(
+            (entry for entry in self._queue_entries(data.get(uid))
+             if entry.get("id") == entry_id),
+            None,
+        )
+        queue = self._ensure_message_queue(uid)
+        if any(
+            isinstance(item, tuple) and len(item) == 4 and item[2] == entry_id
+            for item in queue._queue
+        ):
+            self._promote_queue_entry(queue, entry_id)
+            return
+        if stored is None:
+            queue.put_nowait(("", "", entry_id, False))
+        else:
+            queue.put_nowait((stored.get("text", ""), stored.get("chat_id", ""),
+                              entry_id, stored.get("ephemeral") is True))
+        self._promote_queue_entry(queue, entry_id)
+
+    def _freeze_active_turn_for_pause(self, uid: str) -> None:
+        """Cancel only the in-flight drain/turn tasks, retaining queued work.
+
+        Synchronous: cancelling here avoids awaiting the turn's own settling
+        inside the ``/pause`` command while it still owns the per-user task
+        lock. ``CancelledError`` keeps the active queue entry durable, and
+        ``/pause`` re-queues it in memory so resume restarts it. Returns
+        nothing; a cancelled background deliverer counts as frozen too.
+        """
+        inject_queue = self._inject_queues.get(uid)
+        if inject_queue is not None:
+            inject_queue.close()
+        active_entry = self._active_queue_entries.get(uid)
+        drain = self._queue_drain_tasks.get(uid)
+        running = self._running_tasks.get(uid)
+        in_flight: list = []
+        for task in (drain, running):
+            if (
+                task is not None
+                and not task.done()
+                and all(task is not seen for seen in in_flight)
+            ):
+                in_flight.append(task)
+        if not in_flight and active_entry is None:
+            return
+        self._cancel_acknowledged.add(uid)
+        for task in in_flight:
+            task.cancel()
+        if active_entry:
+            self._requeue_active_entry_for_pause(uid, active_entry)
+
     async def cmd_pause(self, ctx: BotContext) -> None:
         """Hold all work until next user message resumes it."""
         self._pending_input.pop(ctx.user_id, None)
-        self._manually_paused.add(ctx.user_id)
+        uid = ctx.user_id
+        self._manually_paused.add(uid)
+        # Freeze a live turn as well: the flag alone only gates future
+        # queue drain, scheduler, retries and delivery.
+        self._freeze_active_turn_for_pause(uid)
         await ctx.reply_text(
             "Paused. Queue drain, scheduler, retries and delivery hold"
             " until your next message, file or command resumes."
@@ -2692,6 +2762,12 @@ class BotPlatform(ABC):
         text = ctx.args.strip()
         if not text:
             await ctx.reply_text("Usage: /inject <message>")
+            return
+        if ctx.user_id in self._manually_paused:
+            await ctx.reply_text(
+                "Paused. Your message resumes work; send it as plain text"
+                " instead of /inject.",
+            )
             return
         inject_queue = self._inject_queues.get(ctx.user_id)
         if inject_queue is not None:
@@ -5476,11 +5552,15 @@ class BotPlatform(ABC):
                         uid, msg_chat_id, text, queue_entry_id=entry_id,
                     )
             except asyncio.CancelledError:
-                # Keep on disk for restart resume.
+                # Keep on disk for restart resume. A manual /pause freeze
+                # acknowledges the same way as /stop so no "Cancelled."
+                # notice fires, and the entry is re-queued in memory below.
                 if uid not in self._cancel_acknowledged:
                     await self._send_text_best_effort(
                         msg_chat_id, "Cancelled.",
                     )
+                if uid in self._manually_paused:
+                    await self._retain_job_entry(uid, entry_id)
                 break
             except Exception as exc:
                 logger.exception("Queued AI chat failed")

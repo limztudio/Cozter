@@ -181,12 +181,12 @@ class AntigravityCliBackendTests(unittest.IsolatedAsyncioTestCase):
                 with self.subTest(percent=percent):
                     await self.backend.launch(self.ws, "Work", "private-reasoner-low", "full", effort=percent)
                     cmd = self.launch.call_args.args[0]
-                    if expected is None:
-                        self.assertNotIn("--effort", cmd)
-                    else:
-                        self.assertEqual(cmd[cmd.index("--effort") + 1], expected)
+                    self.assertNotIn("--effort", cmd)
+                    self.assertEqual(cmd[cmd.index("--model") + 1], f"private-reasoner-{expected or 'low'}")
         await self.backend.launch(self.ws, "Work", "unknown-private-model", "full", effort=100)
         self.assertNotIn("--effort", self.launch.call_args.args[0])
+        self.assertEqual(self.launch.call_args.args[0][self.launch.call_args.args[0].index("--model") + 1],
+                         "unknown-private-model")
         self.assertEqual(self.backend.context_window_tokens("gemini-4-argon-high"), 1_048_576)
         self.assertIsNone(self.backend.context_window_tokens("gemini-4-argon-private"))
 
@@ -333,6 +333,49 @@ class AntigravityCliBackendTests(unittest.IsolatedAsyncioTestCase):
         self.reap.assert_awaited_once_with(process)
         self.assertEqual(self.record.get("native_session_id"), native_id)
         self.assertFalse(self.record.get("native_resume_unavailable"))
+
+    async def test_pre_init_error_reports_provider_failure_without_accepting_a_conversation(self):
+        error = 'invalid model selection: incompatible model and effort'
+        terminal = {"event": "result", "result": {
+            "conversation_id": "", "status": "ERROR", "response": "", "error": error,
+        }}
+        result = AgentResult()
+        self.backend.parse_event(terminal, result)
+        self.backend.finalize_result(result)
+        self.assertEqual(result.error, error)
+        self.assertIsNone(self.record.get("native_session_id"))
+        self.assertFalse(self.record.get("native_tools_started"))
+
+        native_id = "6ca6c4ef-cc6e-4c0b-a11a-5f93bb7708f3"
+        self.backend.parse_event({"event": "init", "conversation_id": native_id}, AgentResult())
+        for prior_event in (True, False):
+            with self.subTest(prior_event=prior_event):
+                result = AgentResult()
+                if prior_event:
+                    self.backend.parse_event({"event": "init", "conversation_id": native_id}, result)
+                self.backend.parse_event(terminal, result)
+                self.assertEqual(result.error, "Antigravity CLI returned an invalid native conversation ID")
+                self.assertEqual(self.record.get("native_session_id"), native_id)
+
+    async def test_resume_pre_init_error_preserves_identity_and_never_sends_prompt(self):
+        native_id = "6ca6c4ef-cc6e-4c0b-a11a-5f93bb7708f3"
+        await self.record.save(native_session_id=native_id)
+        error = "invalid model selection: incompatible model and effort"
+
+        def failed(process, _expected):
+            process.stdout.feed_data(json.dumps({"event": "result", "result": {
+                "conversation_id": "", "status": "ERROR", "response": "", "error": error,
+            }}).encode() + b"\n")
+
+        self.resume_override = failed
+        with self.assertRaisesRegex(RuntimeError, error):
+            await self.backend.launch(self.ws, "Never sent", None, "full")
+        process = self.resume_processes[-1]
+        process.stdin.write.assert_not_called()
+        self.reap.assert_awaited_once_with(process)
+        self.assertEqual(self.record.get("native_session_id"), native_id)
+        self.assertFalse(self.record.get("native_resume_unavailable"))
+        self.assertFalse(self.backend._stdin_tasks)
 
     async def test_broken_resume_input_cannot_turn_terminal_success_into_completed_work(self):
         native_id = "6ca6c4ef-cc6e-4c0b-a11a-5f93bb7708f3"

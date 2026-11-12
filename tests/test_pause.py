@@ -66,6 +66,80 @@ class PauseCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(await self.bot._deliver_staged_reply(record))
         self.assertTrue(self.bot._resume_manual_pause(self.uid))
 
+    async def test_pause_freezes_live_turn_and_resumes_it(self) -> None:
+        import asyncio
+
+        admitted = await self.bot._admit_queue_entry(
+            self.uid, "live work", "c1",
+            self.bot._cancel_generations.get(self.uid, 0),
+        )
+        assert admitted is not None and admitted.entry is not None
+        entry_id = admitted.entry["id"]
+        msg_queue = self.bot._ensure_message_queue(self.uid)
+        lock = self.bot._ensure_task_lock(self.uid)
+        started = asyncio.Event()
+        entered = asyncio.Event()
+
+        async def fake_turn(*args, **kwargs):
+            started.set()
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                raise
+            return True
+
+        async def fake_checkpoint(*args, **kwargs):
+            entered.set()
+            return True
+
+        drain = asyncio.create_task(
+            self.bot._drain_message_queue(self.uid),
+        )
+        try:
+            with mock.patch.object(self.bot, "_run_turn", fake_turn):
+                await asyncio.wait_for(started.wait(), timeout=5)
+                self.assertIn(self.uid, self.bot._running_tasks)
+                with mock.patch.object(
+                    self.bot, "_save_job_checkpoint", fake_checkpoint,
+                ):
+                    await self.bot.dispatch_command(self._ctx(command="pause"))
+                self.assertIn(self.uid, self.bot._manually_paused)
+                # Acknowledged freeze: no "Cancelled." notice for the live turn.
+                self.assertNotIn("Cancelled.", self.bot.replies)
+                # The frozen entry stays durable and re-queued for resume.
+                data = self.bot._read_queue_file()
+                entries = self.bot._queue_entries(data.get(self.uid))
+                self.assertTrue(any(
+                    entry.get("id") == entry_id for entry in entries
+                ))
+                self.assertTrue(any(
+                    isinstance(item, tuple) and len(item) == 4
+                    and item[2] == entry_id for item in msg_queue._queue
+                ))
+                await asyncio.wait_for(drain, timeout=5)
+            # Resume input restarts the retained work.
+            self.assertFalse(lock.locked())
+            self.assertTrue(self.bot._resume_manual_pause(self.uid))
+        finally:
+            if not drain.done():
+                drain.cancel()
+                try:
+                    await drain
+                except (asyncio.CancelledError, Exception):
+                    pass
+            if lock.locked():
+                lock.release()
+            self.bot._running_tasks.pop(self.uid, None)
+            self.bot._active_queue_entries.pop(self.uid, None)
+            self.bot._inject_queues.pop(self.uid, None)
+            self.bot._cancel_acknowledged.discard(self.uid)
+
+    async def test_pause_rejects_inject_until_resume(self) -> None:
+        await self.bot.dispatch_command(self._ctx(command="pause"))
+        await self.bot.cmd_inject(self._ctx(command="inject", args="late"))
+        self.assertIn("Paused", self.bot.replies[-1])
+        self.assertIn(self.uid, self.bot._manually_paused)
+
     async def test_stop_clears_manual_pause(self) -> None:
         await self.bot.dispatch_command(self._ctx(command="pause"))
         await self.bot.cmd_stop(self._ctx())

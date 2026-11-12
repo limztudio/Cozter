@@ -14,7 +14,7 @@ from ..process_launch import (
 )
 from .base import (
     AgentResult, Backend, CachedModelCatalog, ChatEvent, NativeSessionUnavailableError,
-    fresh_model_catalog, record_backend_error,
+    effort_band, fresh_model_catalog, record_backend_error,
     resolve_executable_prefix, summarize_cli_tool, truncate_status_text,
 )
 
@@ -93,6 +93,20 @@ def _parse_models(output: bytes) -> tuple[str, ...]:
     return tuple(models)
 
 
+def _pre_init_error(event: object) -> str | None:
+    """Extract a CLI startup failure that occurred before a conversation existed."""
+    if not isinstance(event, dict) or event.get("event") != "result":
+        return None
+    terminal = event.get("result")
+    if not isinstance(terminal, dict) or terminal.get("status") != "ERROR":
+        return None
+    error = terminal.get("error")
+    if (terminal.get("conversation_id") == "" and not terminal.get("response")
+            and isinstance(error, str) and error.strip()):
+        return error
+    return None
+
+
 class AntigravityCliBackend(CachedModelCatalog, Backend):
     name = "antigravity_cli"
     executable = "agy"
@@ -155,6 +169,22 @@ class AntigravityCliBackend(CachedModelCatalog, Backend):
         if _model_family((model or self.default_model).strip()) == "gemini-4-argon":
             return 1_048_576
         return None
+
+    def append_launch_options(
+        self, cmd: list[str], model: str | None, effort: int, approval: str,
+        *, model_flag: str = "--model", effort_flag: str | None = "--effort",
+        effort_template: str = "{effort}",
+    ) -> None:
+        # Agy's model catalog encodes effort in each slug. Passing a different
+        # --effort alongside that slug is rejected, so choose the catalog
+        # variant directly instead of sending conflicting flags.
+        level = effort_band(effort, self.effort_levels_for_model(model))
+        selected = model
+        if level is not None:
+            selected = f"{_model_family((model or self.default_model).strip())}-{level}"
+        if selected:
+            cmd += [model_flag, selected]
+        cmd.extend(self.permission_args(approval))
 
     async def launch(
         self, workspace_path: str, prompt: str, model: str | None, approval: str,
@@ -226,6 +256,9 @@ class AntigravityCliBackend(CachedModelCatalog, Backend):
                     "Antigravity CLI ended before confirming its native conversation"
                     + (f": {detail}" if detail else ""),
                 ) from exc
+            startup_error = _pre_init_error(event)
+            if startup_error is not None:
+                raise RuntimeError(startup_error)
             if not isinstance(event, dict) or event.get("event") != "init":
                 raise RuntimeError("Antigravity CLI did not confirm its native conversation before input")
             confirmed = native_session_id(event.get("conversation_id"))
@@ -301,9 +334,11 @@ class AntigravityCliBackend(CachedModelCatalog, Backend):
         kind = event.get("event")
         record = execution_state.current_run()
         if kind == "init":
+            setattr(result, "_antigravity_stream_started", True)
             if self._matching_conversation(event, result):
                 execution_state.adopt_native_session_id(event.get("conversation_id"))
         elif kind == "step_update":
+            setattr(result, "_antigravity_stream_started", True)
             step = event.get("step_update")
             if not isinstance(step, dict) or not self._matching_conversation(step, result):
                 return
@@ -353,6 +388,14 @@ class AntigravityCliBackend(CachedModelCatalog, Backend):
                 record_backend_error(result, "Antigravity CLI returned an invalid result")
                 return
             result.terminal_result_received = True
+            startup_error = _pre_init_error(event)
+            if (startup_error is not None
+                    and not getattr(result, "_antigravity_stream_started", False)
+                    and not result.text and not result.events
+                    and (record is None or (native_session_id(record.get("native_session_id")) is None
+                                            and not record.get("native_tools_started")))):
+                record_backend_error(result, startup_error)
+                return
             if not self._matching_conversation(terminal, result):
                 return
             if record is not None and record.get("native_stdin_failed"):

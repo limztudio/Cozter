@@ -1074,7 +1074,8 @@ list of available commands (`/agent /bg /cancel /pause …`), so the valid names
 are visible without guessing.
 
 `/pause` holds queue drain, scheduled prompts, prerequisite retries and staged
-deliveries for that user. The next text, file or command resumes the held
+deliveries for that user, and freezes a live turn in place without
+discarding its queued work. The next text, file or command resumes the held
 work and also runs that new message; `/stop` clears the hold with the rest.
 
 `/context` applies a character budget to each composed turn. Cozter never
