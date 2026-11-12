@@ -147,5 +147,56 @@ class PauseCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.bot.replies[-1], "Cancelled.")
 
 
-if __name__ == "__main__":
-    unittest.main()
+    async def test_bare_resume_text_wakes_without_queueing(self) -> None:
+        import asyncio
+        from unittest import mock
+
+        async def fake_turn(*args, **kwargs):
+            entry_id = kwargs.get("queue_entry_id")
+            await self.bot._persist_complete(args[1] if len(args) > 1 else self.uid, entry_id)
+            return True
+
+        with mock.patch.object(self.bot, "_run_turn", fake_turn):
+            await self.bot._admit_queue_entry(
+                self.uid, "held task", "c1",
+                self.bot._cancel_generations.get(self.uid, 0),
+            )
+            await self.bot.dispatch_command(self._ctx(command="pause"))
+            await self.bot.dispatch_text(self._ctx(text="resume"))
+            for _ in range(100):
+                data = self.bot._read_queue_file()
+                if not self.bot._queue_entries(data.get(self.uid)):
+                    break
+                await asyncio.sleep(0.05)
+            data = self.bot._read_queue_file()
+            self.assertEqual(
+                [entry.get("text") for entry in self.bot._queue_entries(data.get(self.uid))],
+                [],
+            )
+            self.assertIn("Resumed.", self.bot.replies)
+            self.assertNotIn(self.uid, self.bot._manually_paused)
+
+    async def test_real_resume_text_still_runs_as_new_task(self) -> None:
+        import asyncio
+        from unittest import mock
+
+        seen: list[str] = []
+
+        async def fake_turn(*args, **kwargs):
+            text = args[2] if len(args) > 2 else kwargs.get("text", "")
+            seen.append(text)
+            await self.bot._persist_complete(args[1] if len(args) > 1 else self.uid, kwargs.get("queue_entry_id"))
+            return True
+
+        with mock.patch.object(self.bot, "_run_turn", fake_turn):
+            await self.bot._admit_queue_entry(
+                self.uid, "held task", "c1",
+                self.bot._cancel_generations.get(self.uid, 0),
+            )
+            await self.bot.dispatch_command(self._ctx(command="pause"))
+            await self.bot.dispatch_text(self._ctx(text="now add logging"))
+            for _ in range(100):
+                if len(seen) >= 2:
+                    break
+                await asyncio.sleep(0.05)
+            self.assertEqual(seen[:2], ["held task", "now add logging"])

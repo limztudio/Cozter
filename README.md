@@ -1076,7 +1076,10 @@ are visible without guessing.
 `/pause` holds queue drain, scheduled prompts, prerequisite retries and staged
 deliveries for that user, and freezes a live turn in place without
 discarding its queued work. The next text, file or command resumes the held
-work and also runs that new message; `/stop` clears the hold with the rest.
+work and also runs that new message, except a bare resume word
+(`resume`, `continue`, `proceed`, `unpause`, `go on`) or a photo/file
+without a task caption, which only wakes the held work without queueing
+itself; `/stop` clears the hold with the rest.
 
 `/context` applies a character budget to each composed turn. Cozter never
 truncates the current user message: it trims saved context first and, if

@@ -185,6 +185,10 @@ _DETACHED_TASK_POLL_INTERVAL_SEC = 5.0
 # A stalled provider or chat must leave capacity for unrelated owners.
 _DURABLE_POLL_CONCURRENCY = 4
 _DETACHED_TERMINAL_STATES = frozenset({"done", "failed", "stopped"})
+# Bare resume signals must only wake held work, never become queued work.
+_RESUME_ONLY_TEXTS = frozenset({
+    "resume", "resumed", "continue", "proceed", "unpause", "go on",
+})
 _UNSAFE_FILENAME_CHARS_RE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 NO_WORKSPACE_TEXT = (
     "No workspace selected (or it was deleted). Use /new or /open."
@@ -1332,6 +1336,10 @@ class BotPlatform(ABC):
         if pending is not None:
             await pending(ctx)
             return
+        if ctx.user_id in self._manually_paused and text.lower() in _RESUME_ONLY_TEXTS:
+            self._resume_manual_pause(ctx.user_id)
+            await ctx.reply_text("Resumed.")
+            return
         if self._resume_manual_pause(ctx.user_id):
             await ctx.reply_text("Resumed.")
         await self._ai_chat(ctx)
@@ -1343,8 +1351,16 @@ class BotPlatform(ABC):
         if ctx.attachment is None:
             return
         self._pending_input.pop(ctx.user_id, None)
-        if self._resume_manual_pause(ctx.user_id):
+        resumed = self._resume_manual_pause(ctx.user_id)
+        if resumed:
             await ctx.reply_text("Resumed.")
+        attachment = ctx.attachment
+        assert attachment is not None
+        if resumed:
+            caption = (attachment.caption or "").strip().lower()
+            if not caption or caption in _RESUME_ONLY_TEXTS:
+                # A bare resume photo/file only wakes held work; nothing queued.
+                return
         await self._ai_file(ctx)
 
     def _expect_input(self, user_id: str, callback: Handler) -> None:
