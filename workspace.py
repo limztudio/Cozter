@@ -7,6 +7,7 @@ from collections.abc import Callable
 from . import backends_agent
 from . import config
 from . import flexible
+from .agent_tools.base import coerce_int_arg
 from .utils import CONFIG_DIR, COZTER_DIR, is_path_within
 from .utils import ensure_lock
 from .utils import load_json_object
@@ -819,10 +820,14 @@ def set_flexible_reasoning_effort(workspace_path: str, tier: str, effort: int | 
 def _positive_int_setting(
     workspace_path: str, key: str, default: int,
 ) -> int:
-    value = _load_settings(workspace_path).get(key, default)
-    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+    raw = _load_settings(workspace_path).get(key, default)
+    if isinstance(raw, str):
+        # Settings written as strings (e.g. by hand-editing JSON) coerce
+        # like other int args; unparseable text falls back to the default.
+        raw = coerce_int_arg(raw, default=default, minimum=1)
+    if not isinstance(raw, int) or isinstance(raw, bool) or raw < 1:
         return default
-    return value
+    return raw
 
 
 def _set_minimum_int_setting(

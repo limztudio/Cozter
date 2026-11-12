@@ -509,6 +509,44 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                     setter(tmp, 7)
                     self.assertEqual(getter(tmp), 7)
 
+    def test_positive_int_settings_coerce_numeric_strings(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cases = [
+                (
+                    workspace.get_colony_interval,
+                    workspace.DEFAULT_COLONY_INTERVAL,
+                    "colony_interval",
+                ),
+                (
+                    workspace.get_compact_interval,
+                    workspace.DEFAULT_COMPACT_INTERVAL,
+                    "compact_interval",
+                ),
+                (
+                    workspace.get_history_budget,
+                    workspace.DEFAULT_HISTORY_BUDGET,
+                    "history_budget",
+                ),
+            ]
+            for getter, default, key in cases:
+                with self.subTest(key=key):
+                    os.makedirs(os.path.join(tmp, ".cozter"), exist_ok=True)
+                    with open(
+                        os.path.join(tmp, ".cozter", "settings.json"),
+                        "w",
+                        encoding="utf-8",
+                    ) as file_handle:
+                        json.dump({key: "7"}, file_handle)
+                    self.assertEqual(getter(tmp), 7)
+                    # Unparseable text still falls back to the default.
+                    with open(
+                        os.path.join(tmp, ".cozter", "settings.json"),
+                        "w",
+                        encoding="utf-8",
+                    ) as file_handle:
+                        json.dump({key: "lots"}, file_handle)
+                    self.assertEqual(getter(tmp), default)
+
     def test_available_models_appends_extras_without_duplicates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             os.makedirs(os.path.join(tmp, ".cozter"))
