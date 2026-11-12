@@ -33,7 +33,13 @@ FixtureTool.run_as_script()
 class PluginCliUnicodeTests(unittest.TestCase):
     def run_cli(self, args):
         env = dict(os.environ)
-        env['PYTHONPATH'] = str(Path(__file__).resolve().parents[2])
+        # GitLab CI symlinks the checkout to a `Cozter` dir on PYTHONPATH;
+        # replacing it would hide the package from child processes.
+        package_parent = str(Path(__file__).resolve().parents[2])
+        inherited_pythonpath = env.get("PYTHONPATH", "")
+        env['PYTHONPATH'] = os.pathsep.join(
+            entry for entry in (package_parent, inherited_pythonpath) if entry
+        )
         # Reproduce an ordinary Windows redirected stream even on UTF-8 CI.
         env['PYTHONIOENCODING'] = 'cp1252'
         with tempfile.TemporaryDirectory() as directory:

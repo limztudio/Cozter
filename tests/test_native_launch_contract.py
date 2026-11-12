@@ -42,7 +42,13 @@ class NativeLaunchContractTests(unittest.TestCase):
 
     def run_entrypoint(self, args):
         env = os.environ.copy()
-        env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+        # GitLab CI symlinks the checkout to a `Cozter` dir on PYTHONPATH;
+        # replacing it would hide the package from child processes.
+        inherited_pythonpath = env.get("PYTHONPATH", "")
+        package_parent = str(Path(__file__).resolve().parents[2])
+        env["PYTHONPATH"] = os.pathsep.join(
+            entry for entry in (package_parent, inherited_pythonpath) if entry
+        )
         with tempfile.TemporaryDirectory() as directory:
             return subprocess.run(
                 [sys.executable, "-B", *args], cwd=directory, env=env,

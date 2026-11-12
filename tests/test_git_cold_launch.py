@@ -21,8 +21,15 @@ _FIXTURE_PYTHON = getattr(sys, "_base_executable", None) or sys.executable
 class GitColdImportTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("git"), "Git is required for the local fixture")
     def test_real_status_stays_cold_and_keeps_unicode_output(self):
+        package_parent = str(Path(__file__).resolve().parents[2])
+        inherited_pythonpath = os.environ.get("PYTHONPATH", "")
+        # GitLab CI symlinks the checkout to a `Cozter` dir on PYTHONPATH;
+        # replacing it would hide the package from child processes.
+        pythonpath = os.pathsep.join(
+            entry for entry in (package_parent, inherited_pythonpath) if entry
+        )
         env = os.environ.copy() | {
-            "PYTHONPATH": str(Path(__file__).resolve().parents[2]),
+            "PYTHONPATH": pythonpath,
             "PYTHONIOENCODING": "utf-8",
             "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull,
         }
