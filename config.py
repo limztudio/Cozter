@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 
 from .utils import CONFIG_DIR
 from .utils import normalize_string_list
+from .utils import read_bytes_digest
 from .utils import stat_mtime_size
 from .utils import validate_json_nesting
 
@@ -59,18 +60,21 @@ _DEFAULT_CONFIG = {
 _config_cache_path: str | None = None
 _config_cache_mtime_ns: int | None = None
 _config_cache_size: int | None = None
+_config_cache_digest: str = ""
 _config_cache_data: dict | None = None
 
 
 def _load_config_object() -> dict:
     """Read config.json and require the top-level JSON value to be an object.
 
-    Results are cached by path + mtime + size so runtime getters avoid
-    re-parsing the file on every call. A config edit changes mtime/size
-    and takes effect on the next getter without a restart.
+    Results are cached by path + mtime + size + content digest so runtime
+    getters avoid re-parsing the file on every call. A config edit changes
+    mtime/size and takes effect on the next getter without a restart; the
+    digest covers same-size rewrites landing inside one mtime tick, which a
+    bare mtime+size key would serve stale on coarse filesystems.
     """
     global _config_cache_path, _config_cache_mtime_ns
-    global _config_cache_size, _config_cache_data
+    global _config_cache_size, _config_cache_digest, _config_cache_data
     mtime_ns, size = stat_mtime_size(CONFIG_PATH)
     if (
         mtime_ns is not None
@@ -79,7 +83,9 @@ def _load_config_object() -> dict:
         and mtime_ns == _config_cache_mtime_ns
         and size == _config_cache_size
     ):
-        return _config_cache_data
+        digest_hit = read_bytes_digest(CONFIG_PATH)
+        if digest_hit is not None and digest_hit[1] == _config_cache_digest:
+            return _config_cache_data
     with open(CONFIG_PATH, encoding="utf-8") as file_handle:
         config_data = json.load(file_handle)
     validate_json_nesting(config_data)
@@ -88,9 +94,11 @@ def _load_config_object() -> dict:
     # An unstatable file must still be read and validated, without trusting
     # or replacing the last successfully stamped cache entry.
     if mtime_ns is not None:
+        digest = read_bytes_digest(CONFIG_PATH)
         _config_cache_path = CONFIG_PATH
         _config_cache_mtime_ns = mtime_ns
         _config_cache_size = size
+        _config_cache_digest = digest[1] if digest is not None else ""
         _config_cache_data = config_data
     return config_data
 

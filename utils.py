@@ -633,6 +633,21 @@ def stat_mtime_size(path: str) -> tuple[int | None, int | None]:
         return None, None
 
 
+def read_bytes_digest(path: str) -> tuple[bytes, str] | None:
+    """Return ``(raw, sha256)`` for *path*, or ``None`` when unreadable.
+
+    Lets tiny mtime+size-guarded JSON caches confirm a stat hit without
+    re-parsing: same-size rewrites landing inside one mtime tick otherwise
+    serve stale data on coarse filesystems.
+    """
+    try:
+        with open(path, "rb") as file_handle:
+            raw = file_handle.read()
+    except OSError:
+        return None
+    return raw, hashlib.sha256(raw).hexdigest()
+
+
 def normalize_string_list(
     value: object,
     *,

@@ -11,6 +11,7 @@ from .agent_tools.base import coerce_int_arg
 from .utils import CONFIG_DIR, COZTER_DIR, is_path_within
 from .utils import ensure_lock
 from .utils import load_json_object
+from .utils import read_bytes_digest
 from .utils import save_json_object
 from .utils import stat_mtime_size
 
@@ -314,24 +315,33 @@ def _settings_path(workspace_path: str) -> str:
     return workspace_state_path(workspace_path, "settings.json")
 
 
-_SETTINGS_CACHE: dict[str, tuple[int | None, int | None, dict]] = {}
+_SETTINGS_CACHE: dict[str, tuple[int | None, int | None, str, dict]] = {}
 
 
 def _load_settings(workspace_path: str) -> dict:
-    """Return workspace settings, cached by file mtime+size.
+    """Return workspace settings, cached by file mtime+size+content digest.
 
     A turn reads settings many times (backend, model, permission,
     effort, budgets); re-parsing the same small JSON on every getter
     is pure overhead. Edits change mtime/size so the next getter sees
-    them without a restart; saves refresh the entry inline.
+    them without a restart; saves refresh the entry inline. The digest
+    covers same-size rewrites landing inside one mtime tick, which a
+    bare mtime+size key would serve stale on coarse filesystems.
     """
     path = _settings_path(workspace_path)
     mtime_ns, size = stat_mtime_size(path)
     cached = _SETTINGS_CACHE.get(path)
     if cached is not None and cached[0] == mtime_ns and cached[1] == size:
-        return dict(cached[2])
+        digest_hit = read_bytes_digest(path)
+        if digest_hit is not None and digest_hit[1] == cached[2]:
+            return dict(cached[3])
+        if digest_hit is None and mtime_ns is None:
+            return dict(cached[3])
     data = load_json_object(path, "workspace settings", logger)
-    _SETTINGS_CACHE[path] = (mtime_ns, size, dict(data))
+    digest = read_bytes_digest(path)
+    _SETTINGS_CACHE[path] = (
+        mtime_ns, size, digest[1] if digest is not None else "", dict(data),
+    )
     return data
 
 
@@ -342,7 +352,11 @@ def _save_settings(workspace_path: str, settings: dict) -> None:
     if mtime_ns is None:
         _SETTINGS_CACHE.pop(path, None)
         return
-    _SETTINGS_CACHE[path] = (mtime_ns, size, dict(settings))
+    digest = read_bytes_digest(path)
+    _SETTINGS_CACHE[path] = (
+        mtime_ns, size, digest[1] if digest is not None else "",
+        dict(settings),
+    )
 
 
 def _set_setting(workspace_path: str, key: str, value: object) -> None:

@@ -547,6 +547,46 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                         json.dump({key: "lots"}, file_handle)
                     self.assertEqual(getter(tmp), default)
 
+    def test_caches_survive_same_size_rewrites_in_one_mtime_tick(self) -> None:
+        """Same-size rewrites must not serve stale config/settings caches.
+
+        Coarse filesystems can stamp identical mtime+size on two different
+        contents; the content digest must still notice the change.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, ".cozter"), exist_ok=True)
+            settings_path = os.path.join(tmp, ".cozter", "settings.json")
+            with open(settings_path, "w", encoding="utf-8") as file_handle:
+                json.dump({"history_budget": 8_000}, file_handle)
+            self.assertEqual(workspace.get_history_budget(tmp), 8_000)
+            with open(settings_path, "w", encoding="utf-8") as file_handle:
+                json.dump({"history_budget": 9_000}, file_handle)
+            # Simulate a coarse filesystem: same size, same mtime tick.
+            stamp = os.stat(settings_path)
+            cached = workspace._SETTINGS_CACHE.get(settings_path)
+            self.assertIsNotNone(cached)
+            assert cached is not None
+            os.utime(settings_path, ns=(cached[0] or 0, cached[0] or 0))
+            self.assertEqual(
+                os.stat(settings_path).st_size, stamp.st_size,
+            )
+            self.assertEqual(workspace.get_history_budget(tmp), 9_000)
+
+            with temporary_config({"max_permission": "auto"}) as config_path:
+                self.assertEqual(config.get_max_permission(), "auto")
+                with open(config_path, "w", encoding="utf-8") as file_handle:
+                    json.dump({"max_permission": "full"}, file_handle)
+                # Simulate a coarse filesystem: same size, same mtime tick.
+                assert config._config_cache_mtime_ns is not None
+                os.utime(
+                    config_path,
+                    ns=(
+                        config._config_cache_mtime_ns,
+                        config._config_cache_mtime_ns,
+                    ),
+                )
+                self.assertEqual(config.get_max_permission(), "full")
+
     def test_available_models_appends_extras_without_duplicates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             os.makedirs(os.path.join(tmp, ".cozter"))
