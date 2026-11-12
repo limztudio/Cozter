@@ -13,7 +13,11 @@ class ConfigCacheTests(unittest.TestCase):
     def test_stamped_reads_reuse_cache_and_changed_stamp_refreshes(self) -> None:
         with temporary_config({"value": "initial"}):
             initial = config._load_config_object()
-            with patch("builtins.open", side_effect=AssertionError("cache miss")):
+            # A stat hit may re-read raw bytes for the same-mtime digest
+            # check, but must never re-parse the JSON.
+            with patch(
+                "json.load", side_effect=AssertionError("re-parse"),
+            ):
                 self.assertIs(config._load_config_object(), initial)
             Path(config.CONFIG_PATH).write_text(
                 json.dumps({"value": "updated with a different size"}),
