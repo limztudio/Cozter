@@ -641,6 +641,48 @@ warning: ignored after the catalog
         )))
         self.assertEqual(after, before)
 
+    def test_copilot_durable_launch_failure_removes_the_private_home(self) -> None:
+        """A failed durable launch must not leak the private Copilot home."""
+        from Cozter import execution_state
+
+        before = set(glob.glob(os.path.join(
+            tempfile.gettempdir(), "cozter-copilot-*",
+        )))
+
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as ws:
+                async with execution_state.execution_scope(ws, "sweep-job", "sweep"):
+                    record = await execution_state.record("sweep-launch")
+                    backend = CopilotBackend()
+                    with (
+                        mock.patch.object(
+                            execution_state, "current_run", return_value=record,
+                        ),
+                        mock.patch.object(
+                            copilot_mod,
+                            "executable_command",
+                            return_value=["copilot"],
+                        ),
+                        mock.patch.object(
+                            copilot_mod, "_native_copilot_home", return_value=None,
+                        ),
+                        mock.patch.object(
+                            copilot_mod,
+                            "create_prompt_subprocess",
+                            new=mock.AsyncMock(side_effect=OSError("boom")),
+                        ),
+                        self.assertRaises(OSError),
+                    ):
+                        await backend.launch(
+                            ws, "hello-prompt", "auto", "auto",
+                        )
+
+        asyncio.run(run())
+        after = set(glob.glob(os.path.join(
+            tempfile.gettempdir(), "cozter-copilot-*",
+        )))
+        self.assertEqual(after, before)
+
     def test_grok_prompt_cleanup_is_keyed_by_process_object(self) -> None:
         """Concurrent launches must not share a PID slot on the singleton."""
 

@@ -493,6 +493,7 @@ class CopilotBackend(Backend):
             native_home if native_home is not None
             else _create_isolated_copilot_home()
         )
+        private_home = isolated_home if native_home is None else None
         if record is not None:
             await record.save(native_home="copilot-home", native_session_id=native_id,
                               native_resume_supported=True,
@@ -510,6 +511,10 @@ class CopilotBackend(Backend):
         except BaseException:
             if record is None:
                 _remove_isolated_copilot_home(isolated_home)
+            elif private_home is not None:
+                # Durable turns never run cleanup_process for a proc that
+                # was never spawned; remove the private home we created.
+                _remove_isolated_copilot_home(private_home)
             raise
 
         if record is None:
