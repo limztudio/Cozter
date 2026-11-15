@@ -455,7 +455,7 @@ def _read_file_lines(path: str) -> tuple[list[str], bool, bool]:
     had_final_newline = content.endswith("\n")
     lines = content.split("\n") if content else []
     if had_final_newline and lines and lines[-1] == "":
-        lines.pop()  # drop the trailing "" left by the final newline
+        lines.pop()
     return lines, had_final_newline, uses_crlf
 
 

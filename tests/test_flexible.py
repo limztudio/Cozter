@@ -746,7 +746,7 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
         async def silent_merge(*_args, **kwargs):
             if kwargs["label"] == "Flexible planner":
                 return self.plan_output
-            return ""  # the merge model had nothing to add either
+            return ""
 
         with tempfile.TemporaryDirectory() as ws:
             workspace.ensure_cozter_dir(ws)

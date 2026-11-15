@@ -1397,9 +1397,7 @@ def _md_to_signal_body_and_spans(
         while offset < len(inline_source):
             marker = _signal_inline_marker_at(inline_source, offset)
             if marker is None:
-                # Ordinary prose contains no inline control markers. Append
-                # that whole run instead of testing/storing each character;
-                # every potential marker still uses the existing parser.
+                # Append plain runs at once; the parser handles each possible marker.
                 next_marker = _SIGNAL_INLINE_START_RE.search(inline_source, offset + 1)
                 end = next_marker.start() if next_marker is not None else len(inline_source)
                 append(inline_source[offset:end])

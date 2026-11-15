@@ -764,9 +764,7 @@ class OpenAIChatBackend(Backend):
             if execution is not None:
                 await execution.save(
                     http_identity=identity,
-                    # save() owns and validates its snapshot before returning;
-                    # duplicating the whole history here adds an event-loop
-                    # copy for every completed tool wave.
+                    # save() owns its snapshot; another copy would block the event loop.
                     http_messages=messages[1:],
                     http_prompt_digest=prompt_digest,
                     http_pending_results=dict(pending_results),

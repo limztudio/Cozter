@@ -253,7 +253,6 @@ class TelegramBot(BotPlatform):
                 )
             return last
 
-        # Rich path: markdown → HTML in Telegram-sized pieces.
         last: MessageHandle | None = None
         for chunk in _rich_telegram_chunks(text):
             if not chunk.strip():

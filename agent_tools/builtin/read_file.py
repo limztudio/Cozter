@@ -101,7 +101,7 @@ class ReadFileTool(AgentTool):
         limit = args.get("limit")
         try:
             start = _validated_read_bound(offset, "offset", default=0)
-            assert start is not None  # offset default is 0, never None
+            assert start is not None
         except ValueError as exc:
             return f"Error: {exc}"
         try:

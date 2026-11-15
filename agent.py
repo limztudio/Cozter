@@ -3395,7 +3395,7 @@ async def _run_flexible(
                     fresh += 1
                 admitted = index + 1
             if admitted == done:
-                budget.claim_worker()  # raises with the established checkpoint protocol
+                budget.claim_worker()
             end = admitted
         earlier = list(reports)
         if any(not worker_outputs.get(str(index), {}).get("complete") for index in range(done, end)):

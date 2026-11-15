@@ -360,7 +360,6 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                     workspace.set_permission(tmp, "full")
                 workspace.set_permission(tmp, "auto")
                 self.assertEqual(workspace.get_permission(tmp), "auto")
-                # Stored higher values clamp on read.
                 with open(
                     os.path.join(tmp, ".cozter", "settings.json"),
                     "w",
@@ -1725,7 +1724,6 @@ class MessageDrainedAfterTurnTests(unittest.TestCase):
                 workspace.CONFIG_DIR = tmp
                 try:
                     bot = _GatedDrainBot()
-                    # Sent while the agent is mid-reply.
                     await self._assert_queued_turn_drains(bot)
                 finally:
                     workspace.CONFIG_DIR = old_config_dir

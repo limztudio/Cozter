@@ -10,9 +10,8 @@ if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
     throw "Cozter virtual-environment Python was not found: $python"
 }
 
-# The scheduled entry is this PowerShell process. Own the job here so
-# terminating the supervisor also terminates its descendants, even if
-# this launch inherited another marker.
+# Own the job here even with an inherited marker, so stopping this
+# supervisor also stops its descendants.
 Add-Type -TypeDefinition @'
 using System;
 using System.ComponentModel;
