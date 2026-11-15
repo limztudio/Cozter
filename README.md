@@ -1394,9 +1394,12 @@ standalone script (invoked by CLI backends via `bash`). See
 Shipped plugins:
 
 - `current_time` - current date/time, optional IANA timezone.
-- `calculator` - exact arithmetic through a whitelisted AST evaluator
-  (`+ - * / // % **`, sqrt/log/trig, factorial, pi/e/tau/phi), with
-  magnitude guards so `9**9**9` is refused instead of wedging the host.
+- `calculator` - arithmetic through a whitelisted AST evaluator
+  (`+ - * / // % **`, sqrt/log/trig, factorial, pi/e/tau/phi). Integer
+  addition, subtraction, and multiplication retain Python integer precision;
+  division, powers, and math functions can use floating-point approximations.
+  Magnitude guards refuse expressions
+  such as `9**9**9` instead of wedging the host.
   The 50,000-digit magnitude policy also applies to integer intermediates;
   multiplication refuses oversized products before allocating them.
 - `notes` - persistent workspace notes at `.cozter/notes.md`
@@ -1450,7 +1453,8 @@ Shipped plugins:
   GET/POST/PUT/PATCH/DELETE, optional headers and body (Content-Type
   auto-sniffed for JSON). Reuses `web_fetch`'s public-network-only
   client and re-validates every redirect hop, and unlike `web_fetch`
-  it shows 4xx/5xx bodies, where APIs explain their errors.
+  it shows textual 4xx/5xx bodies, where APIs explain their errors; binary
+  response bodies are not shown.
 
 A plugin can also be run directly from the parent directory:
 
@@ -2285,9 +2289,8 @@ Cancellation retains the user's admission lock through durable cleanup and
 blocks new detached notifications until that cleanup ends. Incoming work can
 then enter the queue in order without being removed by the earlier cancellation.
 
-The built-in file tools also fail closed at workspace boundaries. In
-particular, an `apply_patch` create patch uses an atomic no-clobber link where
-the filesystem supports it, with an exclusive-create fallback: it cannot
+When permitted to run, an `apply_patch` create patch uses an atomic
+no-clobber link where the filesystem supports it, with an exclusive-create fallback: it cannot
 overwrite a file another writer creates concurrently, and a failed preparation
 leaves no partial target. New patch-created files use normal file-creation
 permissions (subject to the process umask); a delete patch must match the
@@ -2295,11 +2298,12 @@ current file and remove all of its content before the file is unlinked. Failed
 hunks leave the target in place. Files in a multi-file patch are applied
 independently: an I/O failure is reported against its target while earlier
 outcomes remain visible and the remaining files are still attempted.
-Each built-in file path is checked both lexically and after resolution, so an
-existing symlink cannot escape the workspace. Content tools follow a safe
-in-workspace final symlink; `delete_file` and `move_file` instead operate on
-that final link itself, while still rejecting a link that resolves outside the
-workspace.
+In `auto` and `confirm` modes, each built-in file path is checked lexically and
+after resolution, so an existing symlink cannot escape the workspace. Content
+tools follow a safe in-workspace final symlink; `delete_file` and `move_file`
+instead operate on that final link itself, while still rejecting a link that
+resolves outside the workspace. `full` mode permits outside paths subject to
+operating system permissions.
 Every patch hunk requires a complete unified-diff header of the form
 `@@ -start[,count] +start[,count] @@`; an omitted count means one line.
 The body must match both declared counts, and line zero requires a zero
