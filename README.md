@@ -1218,9 +1218,9 @@ precompile hygiene covers the other hot paths: the `apply_patch`
 hunk-header parser, the `web_fetch` page-title scan, and the platform
 state filename sanitizer in `backends_bot/base.py`. The
 `read_file` tool likewise returns verified dimensions/format/size for
-image files (`png`/`jpg`/`gif`/`webp`/`bmp`) instead of binary noise, so
-the model answers from what is actually in the picture rather than
-guessing.
+image files (`png`/`jpg`/`gif`/`webp`/`bmp`) instead of binary noise.
+That metadata does not itself provide pixels to the model; image delivery
+depends on the backend and the attachment paths described above.
 
 `max_upload_bytes` is enforced before an outbound transfer and throughout an
 inbound copy or download. Incoming files are staged beside their final path
@@ -1474,8 +1474,8 @@ marker keep a visible ellipsis. `read_file` returns at most 32,768 characters
 per call, including its continuation marker. `offset` still counts lines;
 follow the returned `char_offset` with unchanged `offset`/`limit` to recover
 the remainder of a long line or selected range. Its line-offset and
-character-offset scans are bounded at 16 MiB so a pathological offset cannot leave a worker thread
-walking an enormous file.
+character-offset scans are each bounded at 16,777,216 decoded characters so a
+pathological offset cannot leave a worker thread walking an enormous file.
 Session transcript lines (`session.format_msg_line`) carry the same honesty
 contract: capped content keeps a `… [truncated N chars total … PARTIAL +
 remainder]` marker with the suffix reserved inside the cap, and tight caps
