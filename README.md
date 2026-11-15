@@ -698,10 +698,12 @@ preserving order without blocking agent work. CLI mode likewise restores staged 
 For Signal, `signal-cli` must already be installed, registered, and
 running as a JSON-RPC daemon. Each invite URL in `signal_group_urls` is
 resolved from the daemon's known groups or joined at startup. Set
-`signal_jsonrpc_socket` to the Unix socket exposed by that daemon, for
-example `/run/signal-cli/socket`. Cozter only connects to the socket; run
-and restart the `signal-cli daemon` from a service manager such as
-systemd.
+`signal_jsonrpc_socket` to the daemon's Unix socket path, for example
+`/run/signal-cli/socket`, or its TCP endpoint, for example
+`tcp://127.0.0.1:7583`. TCP addresses use `tcp://HOST:PORT`; bracket IPv6
+addresses, as in `tcp://[::1]:7583`. On platforms without Unix socket
+support, use TCP. Cozter connects to the configured endpoint; run and restart
+the `signal-cli daemon` from a service manager such as systemd.
 
 `signal_account` selects the daemon account by its phone number or ACI. Leave
 it empty when using a single-account daemon. With a multi-account daemon,
