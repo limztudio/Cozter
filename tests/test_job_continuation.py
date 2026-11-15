@@ -8,7 +8,7 @@ from unittest import mock
 
 from Cozter.tests.helpers import persist_queue_entry
 
-from Cozter import agent, session, workspace
+from Cozter import agent, execution_state, session, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
 from Cozter.tests.test_reply_delivery import ReplyDeliveryBot
 
@@ -667,6 +667,109 @@ class JobContinuationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[1][0:2], ("Later request", reopened_ws))
         self.assertIsNone(session.load_session(origin, calls[0][2]))
         self.assertEqual(self.bot._read_queue_file(), {})
+
+    async def test_missing_scheduled_session_keeps_its_pin_until_restored(self):
+        original = "Finish a scheduled job with retained progress"
+        entry = await self.enqueue(original, ephemeral=True)
+        saved_session = session.create_session(self.tmp, name="Scheduled job")
+        sid = saved_session["id"]
+        await self.bot._save_job_checkpoint("u1", entry, {
+            "workspace_path": self.tmp, "session_id": sid, "request": original,
+        })
+        os.unlink(session._session_path(self.tmp, sid))
+
+        with (mock.patch.object(agent, "run", mock.AsyncMock()) as run,
+              mock.patch.object(session, "create_session") as create):
+            with self.assertLogs("Cozter.backends_bot.base", level="ERROR"):
+                await self.bot._drain_message_queue("u1")
+            run.assert_not_awaited()
+            create.assert_not_called()
+
+        saved = await self.bot._load_job_checkpoint("u1", entry)
+        self.assertEqual(saved["state"], "paused")
+        self.assertEqual(saved["session_id"], sid)
+        self.assertIn("missing or unreadable", saved["instruction"])
+
+        session.save_session(self.tmp, sid, saved_session)
+        with (mock.patch.object(agent, "run", mock.AsyncMock(return_value=self.final(sid=sid))) as run,
+              mock.patch.object(self.bot, "_start_queue_drain")):
+            await self.bot._dispatch_ai(self.bot.make_context("u1", "chat"), "Session restored")
+            await self.bot._drain_message_queue("u1")
+        run.assert_awaited_once()
+        self.assertEqual(run.call_args.kwargs["session_id"], sid)
+        self.assertIsNone(session.load_session(self.tmp, sid))
+        self.assertEqual(self.bot._read_queue_file(), {})
+
+    async def test_pausing_scheduled_worker_preserves_native_generation_for_resume(self):
+        original = "Finish in the same scheduled session"
+        entry = await self.enqueue(original, ephemeral=True)
+        started = asyncio.Event()
+        attempted = []
+
+        async def run(prompt, ws, *, session_id, execution_id, **_kwargs):
+            async with execution_state.execution_scope(ws, execution_id, prompt):
+                execution_state.bind_conversation(session_id)
+                async with execution_state.backend_scope("codex", "chosen", "full", 0, native=True) as state:
+                    attempted.append((session_id, state.path))
+                    if started.is_set():
+                        return self.final(sid=session_id)
+                    await state.save(native_session_id="abc12345-1234-1234-1234-123456789abc")
+                    started.set()
+                    await asyncio.Future()
+
+        with (mock.patch.object(agent, "run", run), mock.patch.object(self.bot, "_start_queue_drain")):
+            drain = asyncio.create_task(self.bot._drain_message_queue("u1"))
+            try:
+                await asyncio.wait_for(started.wait(), timeout=2)
+                await self.bot.cmd_pause(self.bot.make_context("u1", "chat", command="pause"))
+                await asyncio.wait_for(drain, timeout=2)
+                sid, native_path = attempted[0]
+                saved = await self.bot._load_job_checkpoint("u1", entry)
+                self.assertEqual(saved["session_id"], sid)
+                self.assertIsNotNone(session.load_session(self.tmp, sid))
+                self.assertTrue(native_path.is_file())
+
+                self.assertTrue(self.bot._resume_manual_pause("u1"))
+                await self.bot._drain_message_queue("u1")
+            finally:
+                if not drain.done():
+                    drain.cancel()
+                    await asyncio.gather(drain, return_exceptions=True)
+
+        self.assertEqual(attempted, [(sid, native_path), (sid, native_path)])
+        self.assertFalse(native_path.exists())
+        self.assertIsNone(session.load_session(self.tmp, sid))
+        self.assertEqual(self.bot._read_queue_file(), {})
+
+    async def test_scheduled_session_survives_failed_completion_write(self):
+        entry = await self.enqueue("Finish scheduled work", ephemeral=True)
+        write_queue = self.bot._write_queue_file
+
+        def fail_completion(data):
+            if not data:
+                raise OSError("queue disk unavailable")
+            write_queue(data)
+
+        async def finish(_prompt, _ws, *, session_id, **_kwargs):
+            return self.final(sid=session_id)
+
+        with (mock.patch.object(agent, "run", mock.AsyncMock(side_effect=finish)) as run,
+              mock.patch.object(self.bot, "_start_queue_drain")):
+            with (mock.patch.object(self.bot, "_write_queue_file", side_effect=fail_completion),
+                  self.assertLogs("Cozter.backends_bot.base", level="WARNING")):
+                with self.assertRaisesRegex(OSError, "queue disk unavailable"):
+                    await self.bot._drain_message_queue("u1")
+
+            saved = await self.bot._load_job_checkpoint("u1", entry)
+            sid = saved["session_id"]
+            self.assertIsNotNone(session.load_session(self.tmp, sid))
+            self.assertNotIn("Full original request completed", self.bot.sent)
+            await self.bot._check_reply_deliveries()
+
+        run.assert_awaited_once()
+        self.assertIsNone(session.load_session(self.tmp, sid))
+        self.assertEqual(self.bot._read_queue_file(), {})
+        self.assertIn("Full original request completed", self.bot.sent)
 
 
 if __name__ == "__main__":

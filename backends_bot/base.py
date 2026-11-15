@@ -3239,61 +3239,94 @@ class BotPlatform(ABC):
     async def _persist_complete(
         self, uid: str, entry_id: str,
     ) -> None:
-        def complete() -> str | None:
+        completed_job: tuple[str, str | None] | None = None
+
+        def complete() -> tuple[str, str | None] | None:
             data = self._read_queue_file()
             entries = self._queue_entries(data.get(uid))
             if not entries:
                 if uid in data:
                     data.pop(uid, None)
                     self._write_queue_file(data)
-                return
+                return None
             completed = next((entry for entry in entries if entry.get("id") == entry_id), {})
             job = completed.get("job", {})
             workspace_path = job.get("workspace_path") if isinstance(job, dict) else None
             remaining = [entry for entry in entries if entry.get("id") != entry_id]
             if len(remaining) == len(entries):
-                return
+                return None
             if remaining:
                 data[uid] = remaining
             else:
                 data.pop(uid, None)
             self._write_queue_file(data)
-            return workspace_path if isinstance(workspace_path, str) else None
+            if not isinstance(workspace_path, str) or not workspace_path:
+                return None
+            sid = job.get("session_id") if completed.get("ephemeral") is True else None
+            return workspace_path, sid if isinstance(sid, str) and sid else None
 
-        completed_workspace = await run_durable_file_operation(self._queue_file_lock, complete)
-        if completed_workspace:
-            from .. import execution_state
-            try:
-                await execution_state.discard_execution(completed_workspace, entry_id)
-            except (OSError, ValueError):
-                logger.warning("Could not clean completed backend continuation", exc_info=True)
+        def committed(job: tuple[str, str | None] | None) -> None:
+            nonlocal completed_job
+            completed_job = job
+
+        try:
+            await run_durable_file_operation(self._queue_file_lock, complete, on_complete=committed)
+        finally:
+            if completed_job is not None:
+                completed_workspace, sid = completed_job
+                from .. import execution_state
+
+                try:
+                    if sid is not None:
+                        await self._delete_ephemeral_session(completed_workspace, sid)
+                finally:
+                    try:
+                        await execution_state.discard_execution(completed_workspace, entry_id)
+                    except (OSError, ValueError):
+                        logger.warning("Could not clean completed backend continuation", exc_info=True)
+
+    async def _delete_ephemeral_session(self, workspace_path: str, sid: str) -> None:
+        try:
+            await run_durable_file_operation(
+                workspace.get_lock(workspace_path),
+                lambda: session.delete_session(workspace_path, sid),
+                required_cleanup=True,
+            )
+        except Exception:
+            logger.warning("Failed to delete ephemeral session %s", sid, exc_info=True)
 
     async def _clear_persistent_queue(self, uid: str) -> int:
-        running = self._running_tasks.get(uid)
-        active = running is not None and not running.done()
+        sessions: list[tuple[str, str]] = []
 
         def clear() -> int:
             data = self._read_queue_file()
-            entries = data.pop(uid, None)
-            if entries is not None:
-                self._write_queue_file(data)
-                for entry in self._queue_entries(entries):
-                    job = entry.get("job")
-                    if (entry.get("ephemeral") is True and isinstance(job, dict)
-                            and (not active or job.get("state") == "paused")
-                            and isinstance(job.get("workspace_path"), str)
-                            and isinstance(job.get("session_id"), str)):
-                        try:
-                            session.delete_session(job["workspace_path"], job["session_id"])
-                        except Exception:
-                            logger.warning("Failed to clean a cancelled scheduled-job session", exc_info=True)
-                return len(self._queue_entries(entries)) or 1
-            return 0
+            removed = data.pop(uid, None)
+            if removed is None:
+                return 0
+            self._write_queue_file(data)
+            entries = self._queue_entries(removed)
+            for entry in entries:
+                job = entry.get("job")
+                if (entry.get("ephemeral") is True and isinstance(job, dict)
+                        and isinstance(job.get("workspace_path"), str)
+                        and isinstance(job.get("session_id"), str)):
+                    sessions.append((job["workspace_path"], job["session_id"]))
+            return len(entries) or 1
 
-        return await run_durable_file_operation(
-            self._queue_file_lock, clear,
-            on_complete=lambda _: self._paused_jobs.discard(uid),
-        )
+        try:
+            return await run_durable_file_operation(
+                self._queue_file_lock, clear,
+                on_complete=lambda _: self._paused_jobs.discard(uid),
+            )
+        finally:
+            cancelled: asyncio.CancelledError | None = None
+            for workspace_path, sid in sessions:
+                try:
+                    await self._delete_ephemeral_session(workspace_path, sid)
+                except asyncio.CancelledError as error:
+                    cancelled = error
+            if cancelled is not None:
+                raise cancelled
 
     async def restore_queues(self) -> None:
         """Rehydrate in-memory queues from disk and resume processing.
@@ -5236,8 +5269,10 @@ class BotPlatform(ABC):
             stripped.splitlines()[0] if stripped else "scheduled", 40,
         )
         sid = job.get("session_id")
-        if not isinstance(sid, str) or session.load_session(ws, sid) is None:
-            sid = None
+        if sid is not None and (
+            not isinstance(sid, str) or await asyncio.to_thread(session.load_session, ws, sid) is None
+        ):
+            raise RuntimeError("Saved scheduled-job session is missing or unreadable. Restore it to resume")
         completed = False
 
         def created(sess_data: dict) -> None:
@@ -5267,23 +5302,14 @@ class BotPlatform(ABC):
             completed = outcome is not False
             return completed
         finally:
-            # A restarted daemon must resume the same job/session, not rerun
-            # its completed workers in a fresh scheduled conversation.
-            try:
-                pending = await self._load_job_checkpoint(uid, queue_entry_id) if queue_entry_id else {}
-                retain_session = (not completed and pending.get("session_id") == sid
-                                  and uid not in self._cancel_acknowledged
-                                  and not self._cancel_work_depths.get(uid, 0))
-                if sid is not None and not retain_session:
-                    await run_durable_file_operation(
-                        workspace.get_lock(ws), lambda: session.delete_session(ws, sid),
-                        required_cleanup=True,
-                    )
-            except Exception:
-                logger.warning(
-                    "Failed to delete ephemeral session %s", sid,
-                    exc_info=True,
-                )
+            # The durable queue owns a pinned session, including during /pause.
+            if sid is not None and not (queue_entry_id and completed):
+                try:
+                    pending = await self._load_job_checkpoint(uid, queue_entry_id) if queue_entry_id else {}
+                    if pending.get("session_id") != sid:
+                        await self._delete_ephemeral_session(ws, sid)
+                except Exception:
+                    logger.warning("Failed to delete ephemeral session %s", sid, exc_info=True)
 
     async def _current_workspace_for_turn(
         self, uid: str, chat_id: str,
