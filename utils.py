@@ -673,13 +673,18 @@ def load_json_object(
     path: str,
     label: str,
     log: logging.Logger | None = None,
+    *,
+    raw: bytes | None = None,
 ) -> dict:
     """Load a JSON object from *path*, returning {} on missing/invalid data."""
-    if not os.path.exists(path):
+    if raw is None and not os.path.exists(path):
         return {}
     try:
-        with open(path, encoding="utf-8") as file_handle:
-            data = json.load(file_handle)
+        if raw is None:
+            with open(path, encoding="utf-8") as file_handle:
+                data = json.load(file_handle)
+        else:
+            data = json.loads(raw.decode("utf-8"))
         validate_json_nesting(data)
     except (ValueError, OSError, RecursionError) as exc:
         (log or logger).warning(

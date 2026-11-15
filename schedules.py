@@ -20,6 +20,7 @@ from typing import TypeAlias
 from . import workspace as workspace_mod
 from .utils import load_json_object
 from .utils import parse_decimal_int
+from .utils import read_bytes_digest
 from .utils import save_json_object
 from .utils import stat_mtime_size
 from .utils import try_parse_int
@@ -42,36 +43,37 @@ def _path(workspace: str) -> str:
     return workspace_mod.workspace_state_path(workspace, SCHEDULES_FILE)
 
 
-_SCHEDULES_CACHE: dict[str, tuple[int | None, int | None, dict]] = {}
+_SCHEDULES_CACHE: dict[str, tuple[int | None, int | None, str, dict]] = {}
 
 
 def _load_all(workspace: str) -> dict:
     """Return the schedule map for *workspace* (empty on failure).
 
-    Cached by file mtime+size like the session/colony caches: the
+    Cached by file stamp and digest like the session/colony caches: the
     scheduler tick re-reads this file for every active (user, workspace)
-    pair every 30s, and most ticks change nothing. Edits refresh
-    mtime/size so the next read sees them.
+    pair every 30s, and most ticks change nothing.
     """
     path = _path(workspace)
     mtime_ns, size = stat_mtime_size(path)
     cached = _SCHEDULES_CACHE.get(path)
-    if cached is not None and cached[0] == mtime_ns and cached[1] == size:
-        return copy.deepcopy(cached[2])
-    data = load_json_object(path, "schedules file", logger)
-    _SCHEDULES_CACHE[path] = (mtime_ns, size, copy.deepcopy(data))
+    snapshot = read_bytes_digest(path)
+    if (cached is not None and cached[0] == mtime_ns and cached[1] == size
+            and snapshot is not None and snapshot[1] == cached[2]):
+        return copy.deepcopy(cached[3])
+    data = load_json_object(path, "schedules file", logger,
+                            raw=snapshot[0] if snapshot is not None else None)
+    if snapshot is not None and mtime_ns is not None:
+        _SCHEDULES_CACHE[path] = (mtime_ns, size, snapshot[1], copy.deepcopy(data))
+    else:
+        _SCHEDULES_CACHE.pop(path, None)
     return data
 
 
 def _save_all(workspace: str, data: dict) -> None:
-    """Persist the schedule map and refresh the read cache."""
+    """Persist the schedule map and invalidate the read cache."""
     path = _path(workspace)
     save_json_object(path, data)
-    mtime_ns, size = stat_mtime_size(path)
-    if mtime_ns is None:
-        _SCHEDULES_CACHE.pop(path, None)
-        return
-    _SCHEDULES_CACHE[path] = (mtime_ns, size, copy.deepcopy(data))
+    _SCHEDULES_CACHE.pop(path, None)
 
 
 def _schedule_list(data: dict, user_id: str | int) -> list:

@@ -215,6 +215,25 @@ class ExecutionStateTests(unittest.IsolatedAsyncioTestCase):
             # Restore the bound and make the owned writer healthy before exit.
             await record.save(oversized=None)
 
+    async def test_growing_state_is_bounded_after_the_existence_check(self):
+        execution = execution_state.Execution(self.workspace, "job", "request")
+        record = execution_state.ExecutionRecord(execution, "record")
+        record.directory
+        path = record.path
+        path.write_bytes(b"{}")
+        real_open = Path.open
+
+        def grow_before_open(candidate, *args, **kwargs):
+            if candidate == path:
+                with open(path, "wb") as stream:
+                    stream.write(b"x" * 65)
+            return real_open(candidate, *args, **kwargs)
+
+        with (mock.patch.object(execution_state, "_MAX_STATE_BYTES", 64),
+              mock.patch.object(Path, "open", grow_before_open)):
+            with self.assertRaisesRegex(RuntimeError, "oversized"):
+                record._read_values()
+
     async def test_native_home_cannot_follow_link_outside_workspace(self):
         outside = tempfile.TemporaryDirectory()
         self.addCleanup(outside.cleanup)

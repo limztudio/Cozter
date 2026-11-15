@@ -102,38 +102,39 @@ def ensure_workspace_state_dir(workspace_path: str, *parts: str) -> str:
     return workspace_state_path(workspace_path, *parts)
 
 
-_state_cache: tuple[str, int | None, int | None, dict] | None = None
+_state_cache: tuple[str, int | None, int | None, str, dict] | None = None
 
 
 def _load_all() -> dict:
-    """Load workspace state, cached by file mtime+size.
+    """Load workspace state, cached by file stamp and content digest.
 
     Shape: {user_id_str: {current: {bot_id: path}, recent: [path, ...]}}.
-    Scheduler enumeration and per-turn routing read this repeatedly;
-    edits change mtime/size so the next read sees them.
+    Scheduler enumeration and per-turn routing read this repeatedly.
     """
     global _state_cache
     mtime_ns, size = stat_mtime_size(WORKSPACE_STATE_PATH)
+    snapshot = read_bytes_digest(WORKSPACE_STATE_PATH)
     if (
         _state_cache is not None
         and _state_cache[:3] == (WORKSPACE_STATE_PATH, mtime_ns, size)
+        and snapshot is not None and snapshot[1] == _state_cache[3]
     ):
-        return copy.deepcopy(_state_cache[3])
+        return copy.deepcopy(_state_cache[4])
     data = load_json_object(
         WORKSPACE_STATE_PATH, "workspace state file", logger,
+        raw=snapshot[0] if snapshot is not None else None,
     )
-    _state_cache = (WORKSPACE_STATE_PATH, mtime_ns, size, copy.deepcopy(data))
+    _state_cache = (
+        (WORKSPACE_STATE_PATH, mtime_ns, size, snapshot[1], copy.deepcopy(data))
+        if snapshot is not None and mtime_ns is not None else None
+    )
     return data
 
 
 def _save_all(data: dict) -> None:
     save_json_object(WORKSPACE_STATE_PATH, data)
     global _state_cache
-    mtime_ns, size = stat_mtime_size(WORKSPACE_STATE_PATH)
-    if mtime_ns is None:
-        _state_cache = None
-        return
-    _state_cache = (WORKSPACE_STATE_PATH, mtime_ns, size, copy.deepcopy(data))
+    _state_cache = None
 
 
 def _get_user(user_id: int | str) -> dict:
@@ -323,40 +324,30 @@ def _load_settings(workspace_path: str) -> dict:
 
     A turn reads settings many times (backend, model, permission,
     effort, budgets); re-parsing the same small JSON on every getter
-    is pure overhead. Edits change mtime/size so the next getter sees
-    them without a restart; saves refresh the entry inline. The digest
+    is pure overhead. Saves invalidate the cache. The digest
     covers same-size rewrites landing inside one mtime tick, which a
     bare mtime+size key would serve stale on coarse filesystems.
     """
     path = _settings_path(workspace_path)
     mtime_ns, size = stat_mtime_size(path)
     cached = _SETTINGS_CACHE.get(path)
+    snapshot = read_bytes_digest(path)
     if cached is not None and cached[0] == mtime_ns and cached[1] == size:
-        digest_hit = read_bytes_digest(path)
-        if digest_hit is not None and digest_hit[1] == cached[2]:
+        if snapshot is not None and snapshot[1] == cached[2]:
             return dict(cached[3])
-        if digest_hit is None and mtime_ns is None:
-            return dict(cached[3])
-    data = load_json_object(path, "workspace settings", logger)
-    digest = read_bytes_digest(path)
-    _SETTINGS_CACHE[path] = (
-        mtime_ns, size, digest[1] if digest is not None else "", dict(data),
-    )
+    data = load_json_object(path, "workspace settings", logger,
+                            raw=snapshot[0] if snapshot is not None else None)
+    if snapshot is not None and mtime_ns is not None:
+        _SETTINGS_CACHE[path] = (mtime_ns, size, snapshot[1], dict(data))
+    else:
+        _SETTINGS_CACHE.pop(path, None)
     return data
 
 
 def _save_settings(workspace_path: str, settings: dict) -> None:
     save_json_object(_settings_path(workspace_path), settings)
     path = _settings_path(workspace_path)
-    mtime_ns, size = stat_mtime_size(path)
-    if mtime_ns is None:
-        _SETTINGS_CACHE.pop(path, None)
-        return
-    digest = read_bytes_digest(path)
-    _SETTINGS_CACHE[path] = (
-        mtime_ns, size, digest[1] if digest is not None else "",
-        dict(settings),
-    )
+    _SETTINGS_CACHE.pop(path, None)
 
 
 def _set_setting(workspace_path: str, key: str, value: object) -> None:

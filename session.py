@@ -18,6 +18,7 @@ from . import workspace as workspace_mod
 from .utils import take_recent_lines
 from .utils import load_json_object
 from .utils import normalize_string_list
+from .utils import read_bytes_digest
 from .utils import save_json_object
 from .utils import stat_mtime_size
 from .utils import validate_json_nesting
@@ -71,30 +72,32 @@ def _load_last_session_map(workspace: str) -> dict:
 
     JSON corruption is logged and swallowed: this is a UX hint, not
     load-bearing state, so a broken file falls back to "no last session"
-    rather than blocking the turn. Cached by mtime+size; a turn reads
+    rather than blocking the turn. Cached by file stamp and digest; a turn reads
     this map several times (resolve + persist + re-resolve).
     """
     path = _last_session_path(workspace)
     mtime_ns, size = stat_mtime_size(path)
     cached = _LAST_SESSION_CACHE.get(path)
-    if cached is not None and cached[0] == mtime_ns and cached[1] == size:
-        return dict(cached[2])
-    data = load_json_object(path, "last_session file", logger)
-    _LAST_SESSION_CACHE[path] = (mtime_ns, size, dict(data))
+    snapshot = read_bytes_digest(path)
+    if (cached is not None and cached[0] == mtime_ns and cached[1] == size
+            and snapshot is not None and snapshot[1] == cached[2]):
+        return dict(cached[3])
+    data = load_json_object(path, "last_session file", logger,
+                            raw=snapshot[0] if snapshot is not None else None)
+    if snapshot is not None and mtime_ns is not None:
+        _LAST_SESSION_CACHE[path] = (mtime_ns, size, snapshot[1], dict(data))
+    else:
+        _LAST_SESSION_CACHE.pop(path, None)
     return data
 
 
-_LAST_SESSION_CACHE: dict[str, tuple[int | None, int | None, dict]] = {}
+_LAST_SESSION_CACHE: dict[str, tuple[int | None, int | None, str, dict]] = {}
 
 
 def _save_last_session_map(workspace: str, data: dict) -> None:
     path = _last_session_path(workspace)
     save_json_object(path, data)
-    mtime_ns, size = stat_mtime_size(path)
-    if mtime_ns is None:
-        _LAST_SESSION_CACHE.pop(path, None)
-        return
-    _LAST_SESSION_CACHE[path] = (mtime_ns, size, dict(data))
+    _LAST_SESSION_CACHE.pop(path, None)
 
 
 def get_last_session(workspace: str, user_id: int | str) -> str | None:

@@ -35,6 +35,7 @@ from .utils import (
     load_json_object,
     normalize_string_list,
     parse_bullets,
+    read_bytes_digest,
     run_internal_backend,
     save_json_object,
     stat_mtime_size,
@@ -65,17 +66,20 @@ def _normalize_compact_count(value: object) -> int:
     return max(0, value)
 
 
-_COLONY_CACHE: dict[str, tuple[int | None, int | None, dict]] = {}
+_COLONY_CACHE: dict[str, tuple[int | None, int | None, str, dict]] = {}
 
 
 def _load(workspace: str) -> dict:
     path = _path(workspace)
     mtime_ns, size = stat_mtime_size(path)
     cached = _COLONY_CACHE.get(path)
-    if cached is not None and cached[0] == mtime_ns and cached[1] == size:
-        return {"items": list(cached[2]["items"]),
-                "compact_count": cached[2]["compact_count"]}
-    data = load_json_object(path, "colony file", logger)
+    snapshot = read_bytes_digest(path)
+    if (cached is not None and cached[0] == mtime_ns and cached[1] == size
+            and snapshot is not None and snapshot[1] == cached[2]):
+        return {"items": list(cached[3]["items"]),
+                "compact_count": cached[3]["compact_count"]}
+    data = load_json_object(path, "colony file", logger,
+                            raw=snapshot[0] if snapshot is not None else None)
     items = data.get("items")
     cleaned = normalize_string_list(items)
     cleaned, dropped = _cap_to_newest(cleaned)
@@ -88,24 +92,14 @@ def _load(workspace: str) -> dict:
     data["compact_count"] = _normalize_compact_count(
         data.get("compact_count", 0)
     )
-    _COLONY_CACHE[path] = (
-        mtime_ns, size,
-        {"items": list(cleaned),
-         "compact_count": data["compact_count"]},
-    )
-    return data
-
-
-def _refresh_colony_cache(path: str, items: list[str], count: int) -> None:
-    """Refresh the cache entry after an inline write."""
-    mtime_ns, size = stat_mtime_size(path)
-    if mtime_ns is None:
+    if snapshot is not None and mtime_ns is not None:
+        _COLONY_CACHE[path] = (
+            mtime_ns, size, snapshot[1],
+            {"items": list(cleaned), "compact_count": data["compact_count"]},
+        )
+    else:
         _COLONY_CACHE.pop(path, None)
-        return
-    _COLONY_CACHE[path] = (
-        mtime_ns, size,
-        {"items": list(items), "compact_count": count},
-    )
+    return data
 
 
 def get_items(workspace: str) -> list[str]:
@@ -123,7 +117,7 @@ def set_items(workspace: str, items: list[str]) -> None:
     data["items"] = cleaned
     path = _path(workspace)
     save_json_object(path, data)
-    _refresh_colony_cache(path, cleaned, data["compact_count"])
+    _COLONY_CACHE.pop(path, None)
 
 
 def get_compact_count(workspace: str) -> int:
@@ -142,7 +136,7 @@ def bump_compact_count(workspace: str) -> int:
     ) + 1
     path = _path(workspace)
     save_json_object(path, data)
-    _refresh_colony_cache(path, data["items"], data["compact_count"])
+    _COLONY_CACHE.pop(path, None)
     return data["compact_count"]
 
 

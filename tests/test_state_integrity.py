@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from Cozter import colony, config, session, utils, workspace
+from Cozter import colony, config, schedules, session, utils, workspace
 
 
 INVALID_JSON_VALUES = (
@@ -18,6 +18,98 @@ INVALID_JSON_VALUES = (
     # CPython 3.12+ allows substantially deeper C decoder stacks than 3.11.
     '{"nested":' + "[" * 100_000 + "0" + "]" * 100_000 + "}",
 )
+
+
+class JsonCacheSnapshotRaceTests(unittest.TestCase):
+    def _cases(self, root):
+        state = os.path.join(root, ".cozter")
+        os.makedirs(state, exist_ok=True)
+        return (
+            (config, os.path.join(root, "config.json"), config._load_config_object,
+             {"max_permission": "auto"}, {"max_permission": "deny"}),
+            (workspace, os.path.join(root, "workspaces.json"), workspace._load_all,
+             {"u": {"current": {"bot": "aaa"}}}, {"u": {"current": {"bot": "bbb"}}}),
+            (workspace, os.path.join(state, "settings.json"), lambda: workspace._load_settings(root),
+             {"permission": "auto"}, {"permission": "deny"}),
+            (colony, os.path.join(state, "colony.json"), lambda: colony._load(root),
+             {"items": ["aaa"], "compact_count": 0}, {"items": ["bbb"], "compact_count": 0}),
+            (session, os.path.join(state, "last_session.json"), lambda: session._load_last_session_map(root),
+             {"u": "aaa"}, {"u": "bbb"}),
+            (schedules, os.path.join(state, "schedules.json"), lambda: schedules._load_all(root),
+             {"u": [{"command": "aaa"}]}, {"u": [{"command": "bbb"}]}),
+        )
+
+    def _write(self, path, data, stamp=None):
+        with open(path, "w", encoding="utf-8") as stream:
+            json.dump(data, stream)
+        if stamp is not None:
+            os.utime(path, ns=(stamp, stamp))
+
+    def test_same_stamp_rewrite_and_snapshot_race_refresh_all_six_caches(self):
+        with tempfile.TemporaryDirectory() as root:
+            cases = self._cases(root)
+            with (mock.patch.object(config, "CONFIG_PATH", cases[0][1]),
+                  mock.patch.object(workspace, "WORKSPACE_STATE_PATH", cases[1][1])):
+                for module, path, load, old, new in cases:
+                    with self.subTest(path=path):
+                        self._write(path, old)
+                        stamp = os.stat(path).st_mtime_ns
+                        self.assertEqual(load(), old)
+                        self._write(path, new, stamp)
+                        self.assertEqual(load(), new)
+                        self._write(path, old, stamp)
+                        real = module.read_bytes_digest
+
+                        def replace_after_read(name):
+                            snapshot = real(name)
+                            self._write(path, new, stamp)
+                            return snapshot
+
+                        with mock.patch.object(module, "read_bytes_digest", side_effect=replace_after_read):
+                            self.assertEqual(load(), old)
+                        self.assertEqual(load(), new)
+
+    def test_replacement_after_save_is_not_cached_as_the_saved_value(self):
+        with tempfile.TemporaryDirectory() as root:
+            cases = self._cases(root)
+            saves = (
+                lambda value: workspace._save_all(value),
+                lambda value: workspace._save_settings(root, value),
+                lambda value: colony.set_items(root, value["items"]),
+                lambda value: session._save_last_session_map(root, value),
+                lambda value: schedules._save_all(root, value),
+            )
+            with mock.patch.object(workspace, "WORKSPACE_STATE_PATH", cases[1][1]):
+                for (module, path, load, old, new), save in zip(cases[1:], saves):
+                    with self.subTest(path=path):
+                        self._write(path, old)
+                        real = module.save_json_object
+
+                        def replace_after_save(name, data):
+                            real(name, data)
+                            self._write(path, new, os.stat(path).st_mtime_ns)
+
+                        with mock.patch.object(module, "save_json_object", side_effect=replace_after_save):
+                            save(old)
+                        self.assertEqual(load(), new)
+
+    def test_permission_replacement_before_fingerprint_cannot_pin_old_value(self):
+        with tempfile.TemporaryDirectory() as root:
+            cases = self._cases(root)
+            with mock.patch.object(config, "CONFIG_PATH", cases[0][1]):
+                for module, path, load, old, new in (cases[0], cases[2]):
+                    with self.subTest(path=path):
+                        self._write(path, old)
+                        stamp = os.stat(path).st_mtime_ns
+                        real = module.read_bytes_digest
+
+                        def replace_before_read(name):
+                            self._write(path, new, stamp)
+                            return real(name)
+
+                        with mock.patch.object(module, "read_bytes_digest", side_effect=replace_before_read):
+                            load()
+                        self.assertEqual(load(), new)
 
 
 class StateValidationAndRecoveryTests(unittest.TestCase):

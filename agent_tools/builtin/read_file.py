@@ -53,7 +53,7 @@ class ReadFileTool(AgentTool):
     description = (
         "Read a UTF-8 text file (up to 32K characters/call). offset skips"
         " lines; limit bounds lines. Follow any returned char_offset cursor"
-        " with the same offset/limit to recover even a long single line."
+        " with the same offset/limit until the character scan limit is reached."
         " For image files (png/jpg/gif/webp/bmp), returns"
         " verified dimensions/format/size instead of binary noise —"
         " vision-capable backends already receive the pixels natively."
@@ -134,6 +134,13 @@ class ReadFileTool(AgentTool):
 
         if truncated:
             def marker(length: int) -> str:
+                if position + length > _READ_FILE_MAX_SKIP_CHARS:
+                    return (
+                        f"\n… [truncated file preview at {length} characters;"
+                        " character scan limit reached; a later line offset may help,"
+                        " but cannot recover the rest of one long line;"
+                        " say PARTIAL + remainder]"
+                    )
                 return (
                     f"\n… [truncated file preview at {length} characters;"
                     f" continue with offset={start}, char_offset={position + length}"

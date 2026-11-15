@@ -16,7 +16,7 @@ class ConfigCacheTests(unittest.TestCase):
             # A stat hit may re-read raw bytes for the same-mtime digest
             # check, but must never re-parse the JSON.
             with patch(
-                "json.load", side_effect=AssertionError("re-parse"),
+                "json.loads", side_effect=AssertionError("re-parse"),
             ):
                 self.assertIs(config._load_config_object(), initial)
             Path(config.CONFIG_PATH).write_text(

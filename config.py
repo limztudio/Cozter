@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import sys
@@ -76,6 +77,7 @@ def _load_config_object() -> dict:
     global _config_cache_path, _config_cache_mtime_ns
     global _config_cache_size, _config_cache_digest, _config_cache_data
     mtime_ns, size = stat_mtime_size(CONFIG_PATH)
+    snapshot = read_bytes_digest(CONFIG_PATH)
     if (
         mtime_ns is not None
         and _config_cache_data is not None
@@ -83,22 +85,25 @@ def _load_config_object() -> dict:
         and mtime_ns == _config_cache_mtime_ns
         and size == _config_cache_size
     ):
-        digest_hit = read_bytes_digest(CONFIG_PATH)
-        if digest_hit is not None and digest_hit[1] == _config_cache_digest:
+        if snapshot is not None and snapshot[1] == _config_cache_digest:
             return _config_cache_data
-    with open(CONFIG_PATH, encoding="utf-8") as file_handle:
-        config_data = json.load(file_handle)
+    if snapshot is None:
+        with open(CONFIG_PATH, "rb") as file_handle:
+            raw = file_handle.read()
+        digest = hashlib.sha256(raw).hexdigest()
+    else:
+        raw, digest = snapshot
+    config_data = json.loads(raw.decode("utf-8"))
     validate_json_nesting(config_data)
     if not isinstance(config_data, dict):
         raise ValueError("config.json must contain a JSON object")
     # An unstatable file must still be read and validated, without trusting
     # or replacing the last successfully stamped cache entry.
     if mtime_ns is not None:
-        digest = read_bytes_digest(CONFIG_PATH)
         _config_cache_path = CONFIG_PATH
         _config_cache_mtime_ns = mtime_ns
         _config_cache_size = size
-        _config_cache_digest = digest[1] if digest is not None else ""
+        _config_cache_digest = digest
         _config_cache_data = config_data
     return config_data
 

@@ -21,6 +21,7 @@ MAX_SCAN_ENTRIES = 8_192
 MAX_NATIVE_DEPTH = 5
 MAX_RESPONSE_CHARS = 60_000
 MAX_CATALOG_CHARS = 12_000
+_MAX_BRIDGE_MANIFEST_BYTES = 512 * 1024
 _BRIDGE_HEADER = "<!-- Cozter skill bridge v1 -->"
 _MANIFEST_VERSION = 1
 _CURRENT: ContextVar["SkillCatalog | None"] = ContextVar("cozter_skills", default=None)
@@ -71,6 +72,14 @@ def _slug(value: str) -> str:
 
 def _digest(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
+
+
+def _read_bounded_bytes(path: Path, limit: int) -> bytes:
+    with path.open("rb") as stream:
+        data = stream.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("file is oversized")
+    return data
 
 
 def _read_utf8(path: Path, root: Path) -> tuple[str, str, Path]:
@@ -157,10 +166,10 @@ def _is_bridge(text: str) -> bool:
 def _copilot_settings_roots(copilot_home: Path) -> list[tuple[Path, str]]:
     settings = copilot_home / "settings.json"
     try:
-        if settings.is_symlink() or not settings.is_file() or settings.stat().st_size > MAX_SKILL_BYTES:
+        if settings.is_symlink() or not settings.is_file():
             return []
-        payload = json.loads(settings.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        payload = json.loads(_read_bounded_bytes(settings, MAX_SKILL_BYTES).decode("utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
         return []
     if not isinstance(payload, dict) or not isinstance(payload.get("skillDirectories"), list):
         return []
@@ -496,9 +505,9 @@ def _sync_bridges(catalog: SkillCatalog) -> SkillCatalog:
         old: dict = {}
         if manifest_path.exists():
             try:
-                if manifest_path.stat().st_size > 512 * 1024:
-                    raise ValueError("bridge manifest is oversized")
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                manifest = json.loads(
+                    _read_bounded_bytes(manifest_path, _MAX_BRIDGE_MANIFEST_BYTES).decode("utf-8")
+                )
                 if not isinstance(manifest, dict) or manifest.get("version") != _MANIFEST_VERSION or not isinstance(manifest.get("files"), dict):
                     raise ValueError("bridge manifest has an invalid format")
                 old = manifest["files"]
@@ -525,7 +534,10 @@ def _sync_bridges(catalog: SkillCatalog) -> SkillCatalog:
                 if not isinstance(relative, str) or not _BRIDGE_RELPATH_RE.fullmatch(relative):
                     raise ValueError("manifest contains an invalid bridge path")
                 target = _target(base, relative)
-                existing = target.read_bytes() if target.exists() and target.stat().st_size <= MAX_SKILL_BYTES else None
+                try:
+                    existing = _read_bounded_bytes(target, MAX_SKILL_BYTES) if target.exists() else None
+                except ValueError:
+                    existing = None
                 owned = (existing is not None and _is_bridge(existing.decode("utf-8"))
                          and old.get(relative) == _digest(existing))
                 if target.exists() and not owned:
@@ -544,7 +556,15 @@ def _sync_bridges(catalog: SkillCatalog) -> SkillCatalog:
             except (OSError, UnicodeError, ValueError) as exc:
                 warnings.append(f"Native skill bridge skipped for {relative}: {exc}")
         payload = json.dumps({"version": _MANIFEST_VERSION, "files": kept}, indent=2).encode("utf-8")
-        if not manifest_path.exists() or manifest_path.read_bytes() != payload:
+        try:
+            existing_manifest = (
+                _read_bounded_bytes(manifest_path, _MAX_BRIDGE_MANIFEST_BYTES)
+                if manifest_path.exists() else None
+            )
+        except (OSError, ValueError) as exc:
+            return SkillCatalog(catalog.workspace_path, catalog.entries,
+                                (*catalog.warnings, f"Native skill bridge sync skipped: {exc}"))
+        if existing_manifest != payload:
             _atomic_write(manifest_path, payload, base)
     bounded = [warning[:512] for warning in warnings[:50]]
     if len(warnings) > 50:

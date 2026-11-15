@@ -24,6 +24,43 @@ class WorkspaceSkillsTests(unittest.IsolatedAsyncioTestCase):
         path.write_bytes(text.encode("utf-8"))
         return path
 
+    async def test_growing_native_settings_are_not_read_past_limit(self) -> None:
+        settings = self.ws / "settings.json"
+        content = json.dumps({"skillDirectories": [str(self.ws)]})
+        settings.write_text(content, encoding="utf-8")
+        real_open = Path.open
+
+        def grow_before_open(path, *args, **kwargs):
+            if path == settings:
+                with open(path, "w", encoding="utf-8") as stream:
+                    stream.write(content + " " * 200)
+            return real_open(path, *args, **kwargs)
+
+        with (mock.patch.object(skills, "MAX_SKILL_BYTES", 128),
+              mock.patch.object(Path, "open", grow_before_open)):
+            self.assertEqual(skills._copilot_settings_roots(self.ws), [])
+
+    async def test_growing_bridge_manifest_is_preserved_at_limit(self) -> None:
+        directory = self.ws / ".cozter"
+        directory.mkdir()
+        manifest = directory / "skill_bridges.json"
+        content = '{"version":1,"files":{}}'
+        manifest.write_text(content, encoding="utf-8")
+        real_open = Path.open
+
+        def grow_before_open(path, *args, **kwargs):
+            if path == manifest:
+                with open(path, "w", encoding="utf-8") as stream:
+                    stream.write(content + " " * 200)
+            return real_open(path, *args, **kwargs)
+
+        catalog = skills.SkillCatalog(str(self.ws.resolve()), (), ())
+        with (mock.patch.object(skills, "_MAX_BRIDGE_MANIFEST_BYTES", 64),
+              mock.patch.object(Path, "open", grow_before_open)):
+            result = skills._sync_bridges(catalog)
+        self.assertTrue(any("oversized" in warning for warning in result.warnings))
+        self.assertEqual(manifest.read_text(encoding="utf-8"), content + " " * 200)
+
     async def test_discovery_is_read_only_and_every_flat_markdown_file_is_a_skill(self) -> None:
         self.assertEqual(skills.discover(str(self.ws)).entries, ())
         self.assertFalse(self.source.exists())

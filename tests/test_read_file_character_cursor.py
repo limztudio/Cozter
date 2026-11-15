@@ -4,8 +4,10 @@ import re
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from Cozter.agent_tools import execute_tool
+from Cozter.agent_tools.builtin import read_file
 
 
 class ReadFileCharacterCursorTests(unittest.IsolatedAsyncioTestCase):
@@ -64,6 +66,22 @@ class ReadFileCharacterCursorTests(unittest.IsolatedAsyncioTestCase):
                         "path": "data.txt", "char_offset": value,
                     }, directory, "confirm", lambda _event: None)
                     self.assertTrue(result.startswith("Error:"), result)
+
+    async def test_page_crossing_scan_bound_does_not_offer_unusable_cursor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "long.txt").write_text("한" * 50_000, encoding="utf-8")
+            with mock.patch.object(read_file, "_READ_FILE_MAX_SKIP_CHARS", 256):
+                for batch in (False, True):
+                    with self.subTest(batch=batch):
+                        request = {"path": "long.txt", "char_offset": 256}
+                        result = await execute_tool(
+                            "read_files" if batch else "read_file",
+                            {"files": [request]} if batch else request,
+                            directory, "confirm", lambda _event: None,
+                        )
+                        self.assertIn("character scan limit reached", result)
+                        self.assertIn("PARTIAL + remainder", result)
+                        self.assertNotIn("continue with offset=", result)
 
     async def test_every_file_in_a_full_batch_keeps_a_working_cursor(self):
         with tempfile.TemporaryDirectory() as directory:

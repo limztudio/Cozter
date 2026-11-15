@@ -193,11 +193,13 @@ class ExecutionRecord:
         path = self.path
         if not path.exists():
             return {}
-        if path.stat().st_size > _MAX_STATE_BYTES:
-            raise RuntimeError("Saved backend continuation is oversized; preserve and inspect it before resuming")
         try:
+            with path.open("rb") as stream:
+                raw = stream.read(_MAX_STATE_BYTES + 1)
+            if len(raw) > _MAX_STATE_BYTES:
+                raise RuntimeError("Saved backend continuation is oversized; preserve and inspect it before resuming")
             data = json.loads(
-                path.read_bytes(), parse_constant=_finite_json_float,
+                raw, parse_constant=_finite_json_float,
                 parse_float=_finite_json_float,
             )
             validate_json_nesting(data)
