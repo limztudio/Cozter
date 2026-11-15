@@ -2210,23 +2210,47 @@ class BotPlatform(ABC):
         )
         self._expect_input(ctx.user_id, self._receive_effort)
 
-    async def _receive_effort(self, ctx: BotContext) -> None:
+    async def cmd_summary_effort(self, ctx: BotContext) -> None:
+        if ctx.args.strip():
+            ctx.text = ctx.args
+            await self._receive_effort(ctx, summary=True)
+            return
+        ws = await self._require_ws(ctx)
+        if ws is None:
+            return
+        current = workspace.get_summary_reasoning_effort(ws)
+        await ctx.reply_text(
+            f"Current summary reasoning effort: {current}%\n"
+            f"{self._summary_effort_resolution_text(ws, current)}\n\n"
+            "0 uses the backend default. 100 selects the model's highest supported effort."
+            "\nEnter a number 0-100 (or /cancel):"
+        )
+        self._expect_input(ctx.user_id, functools.partial(self._receive_effort, summary=True))
+
+    @staticmethod
+    def _summary_effort_resolution_text(ws: str, value: int) -> str:
+        name = workspace.get_summary_backend_name(ws)
+        model = workspace.get_summary_model(ws)
+        native = backends_agent.get_backend(name).describe_effort(value, model)
+        return f"{name}/{model} → {native}"
+
+    async def _receive_effort(self, ctx: BotContext, *, summary: bool = False) -> None:
         ws = await self._require_ws(ctx)
         if ws is None:
             return
         text = ctx.text.strip().rstrip("%").strip()
         value = try_parse_int(text)
-        if value is None:
-            await ctx.reply_text(
-                f"Not a number: {ctx.text!r}\nEnter 0-100 (or /cancel):"
-            )
-            self._expect_input(ctx.user_id, self._receive_effort)
+        if value is None or not 0 <= value <= 100:
+            error = f"Not a number: {ctx.text!r}" if value is None else f"Out of range: {value}"
+            await ctx.reply_text(f"{error}\nEnter 0-100 (or /cancel):")
+            self._expect_input(ctx.user_id, functools.partial(self._receive_effort, summary=summary))
             return
-        if not 0 <= value <= 100:
+        if summary:
+            workspace.set_summary_reasoning_effort(ws, value)
             await ctx.reply_text(
-                f"Out of range: {value}\nEnter 0-100 (or /cancel):"
+                f"Summary reasoning effort set to: {value}%\n"
+                + self._summary_effort_resolution_text(ws, value)
             )
-            self._expect_input(ctx.user_id, self._receive_effort)
             return
         workspace.set_reasoning_effort(ws, value)
         await ctx.reply_text(
@@ -5654,6 +5678,7 @@ def _build_command_registry() -> dict[str, Handler]:
         "open":         BotPlatform.cmd_open,
         "model":        BotPlatform.cmd_model,
         "summarymodel": BotPlatform.cmd_summary_model,
+        "summaryeffort": BotPlatform.cmd_summary_effort,
         "agent":        BotPlatform.cmd_agent,
         "summaryagent": BotPlatform.cmd_summary_agent,
         **_flexible_tier_commands(),

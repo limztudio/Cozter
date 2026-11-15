@@ -1043,6 +1043,7 @@ reserved or unavailable; direct Slack mentions work too, for example
 | `/effort_flexible_{low,mid,high} [0–100\|default]` | Set each Flexible tier's effort; `default` inherits `/effort` |
 | `/summaryagent` | Pick the backend used for compaction / titling / routing, and for flexible's plan + merge |
 | `/summarymodel` | Pick the model for the summary backend |
+| `/summaryeffort [0–100]` | Set the summary backend's reasoning effort for this workspace |
 | `/permission` | full / auto / confirm / deny — how the agent treats tool calls |
 | `/style` | collaborative / autonomous — whether the agent asks before big/ambiguous actions or runs full-auto |
 | `/effort` | 0–100 reasoning effort; each backend maps to its native scale |
@@ -1669,9 +1670,9 @@ An explicit `0` asks that tier's backend to use its own default. Only `100`
 selects the chosen model's highest supported effort. Overrides are stored in
 `.cozter/settings.json` as `flexible_low_reasoning_effort`,
 `flexible_mid_reasoning_effort` and `flexible_high_reasoning_effort`.
-These settings apply to task workers; planner, merge and other internal calls
-retain their backend defaults. Each plan snapshots its tier efforts so parallel
-workers use one consistent policy. Effective effort changes invalidate worker
+These settings apply to task workers. `/summaryeffort` sets the effort for
+planner, merge, and other calls to the summary backend. Each plan snapshots its
+tier efforts so parallel workers use one consistent policy. Effective effort changes invalidate worker
 checkpoints for that policy; adding the feature preserves checkpoints when all
 tiers still inherit their existing workspace effort.
 
@@ -2085,13 +2086,15 @@ The provider treats `xhigh` as `max`, so Cozter maps 1–99 to `none` or `high`
 and reserves `max` for 100. Its explicit `none` level disables thinking;
 zero still omits the override and keeps the provider default.
 
-The setting applies only to user-facing chat turns. Internal calls
-(compaction, routing, titling, colony consolidation) skip the effort
-parameter, so utility work stays cheap regardless of the workspace
-setting. Flexible task workers use their tier's `/effort_flexible_low`,
-`/effort_flexible_mid` or `/effort_flexible_high` override when present,
-and inherit `/effort` otherwise. Flexible planner, merge and judge calls
-also keep their backend defaults.
+`/effort` applies to user-facing chat turns. Flexible task workers use their
+tier's `/effort_flexible_low`, `/effort_flexible_mid`, or `/effort_flexible_high`
+override when present, and inherit `/effort` otherwise.
+
+Use `/summaryeffort 60` to set an independent workspace effort for routing,
+compaction, titling, colony consolidation, and completion checks, as well as
+Flexible planning and merging. Run `/summaryeffort` to see the current value
+and enter a new one. The confirmation shows the summary backend, model, and
+native level. The initial value is `0`, which uses the summary backend's default.
 
 ## Interaction style
 

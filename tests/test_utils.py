@@ -702,7 +702,7 @@ class InternalBackendRunnerTests(unittest.TestCase):
         )
         self.assertEqual(
             backend.launch_kwargs,
-            {"approval": "deny", "compaction": True},
+            {"approval": "deny", "compaction": True, "effort": 0},
         )
 
     def test_internal_backend_launch_failure_returns_empty_result(self) -> None:

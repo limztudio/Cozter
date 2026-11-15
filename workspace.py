@@ -769,8 +769,8 @@ def set_interaction_style(workspace_path: str, style: str) -> None:
     )
 
 
-def _reasoning_effort(settings: dict) -> int:
-    value = settings.get("reasoning_effort", DEFAULT_REASONING_EFFORT)
+def _reasoning_effort(settings: dict, key: str = "reasoning_effort") -> int:
+    value = settings.get(key, DEFAULT_REASONING_EFFORT)
     if not isinstance(value, int) or isinstance(value, bool):
         return DEFAULT_REASONING_EFFORT
     return max(0, min(value, 100))
@@ -781,12 +781,25 @@ def get_reasoning_effort(workspace_path: str) -> int:
     return _reasoning_effort(_load_settings(workspace_path))
 
 
-def set_reasoning_effort(workspace_path: str, effort: int) -> None:
-    """Clamp to 0-100 and persist."""
+def _set_reasoning_effort(workspace_path: str, key: str, effort: int) -> None:
     if isinstance(effort, bool) or not isinstance(effort, int):
         raise ValueError("reasoning effort must be an integer 0-100")
     clamped = max(0, min(effort, 100))
-    _set_setting(workspace_path, "reasoning_effort", clamped)
+    _set_setting(workspace_path, key, clamped)
+
+
+def set_reasoning_effort(workspace_path: str, effort: int) -> None:
+    """Clamp to 0-100 and persist."""
+    _set_reasoning_effort(workspace_path, "reasoning_effort", effort)
+
+
+def get_summary_reasoning_effort(workspace_path: str) -> int:
+    """Return internal calls' effort, defaulting to the backend's own level."""
+    return _reasoning_effort(_load_settings(workspace_path), "summary_reasoning_effort")
+
+
+def set_summary_reasoning_effort(workspace_path: str, effort: int) -> None:
+    _set_reasoning_effort(workspace_path, "summary_reasoning_effort", effort)
 
 
 def _flexible_effort_override(settings: dict, tier: str) -> int | None:

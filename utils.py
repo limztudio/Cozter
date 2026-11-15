@@ -1286,7 +1286,9 @@ async def run_internal_backend(
     Return ``None`` when the backend executable is missing and an empty
     string when it runs without producing an agent response.
     """
-    from . import supervision
+    from . import supervision, workspace
+
+    effort = workspace.get_summary_reasoning_effort(workspace_path)
 
     async def launch_and_drain() -> str | None:
         from . import execution_state
@@ -1294,6 +1296,7 @@ async def run_internal_backend(
             try:
                 proc = await backend.launch(
                     workspace_path, prompt, model, approval="deny", compaction=True,
+                    effort=effort,
                 )
             except FileNotFoundError:
                 log.log(missing_level, missing_executable_message, backend.executable)

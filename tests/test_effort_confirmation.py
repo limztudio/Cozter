@@ -115,6 +115,30 @@ class EffortConfirmationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(workspace.get_reasoning_effort(self.ws), 99)
         self.assertNotIn("owner", self.bot._pending_input)
 
+    async def test_summary_picker_retry_updates_only_summary_effort(self) -> None:
+        workspace.set_reasoning_effort(self.ws, 25)
+        workspace.set_summary_backend_name(self.ws, "zai")
+        workspace.set_summary_model(self.ws, "glm-5.2")
+
+        await self.bot.dispatch_command(self.context(command="summaryeffort"))
+        self.assertIn("backend default (no override)", self.reply_line("zai/glm-5.2"))
+
+        await self.bot.dispatch_text(self.context(text="101"))
+        self.assertIn("Out of range", self.bot.send_text.call_args.args[1])
+        self.assertEqual(workspace.get_summary_reasoning_effort(self.ws), 0)
+
+        await self.bot.dispatch_text(self.context(text="99%"))
+        self.assertIn("→ high", self.reply_line("zai/glm-5.2"))
+        self.assertEqual(workspace.get_summary_reasoning_effort(self.ws), 99)
+        self.assertNotIn("owner", self.bot._pending_input)
+
+        await self.bot.dispatch_command(self.context(command="summaryeffort", args="100"))
+        self.assertIn("→ max", self.reply_line("zai/glm-5.2"))
+        await self.bot.dispatch_command(self.context(command="summaryeffort", args="0"))
+        self.assertIn("backend default (no override)", self.reply_line("zai/glm-5.2"))
+        self.assertEqual(workspace.get_summary_reasoning_effort(self.ws), 0)
+        self.assertEqual(workspace.get_reasoning_effort(self.ws), 25)
+
     async def test_flexible_confirmation_keeps_each_override_and_reset_distinct(self) -> None:
         workspace.set_backend_name(self.ws, "flexible")
         for tier, name, model in (

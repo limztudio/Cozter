@@ -245,7 +245,7 @@ class SkillPromptIntegrationTests(unittest.IsolatedAsyncioTestCase):
         for prompt, kwargs, planning, native_record in launches:
             self.assertNotIn("SKILL-CATALOG-DESCRIPTION", prompt)
             self.assertNotIn(_BODY, prompt)
-            self.assertEqual(kwargs, {"approval": "deny", "compaction": True})
+            self.assertEqual(kwargs, {"approval": "deny", "compaction": True, "effort": 0})
             self.assertFalse(planning)
             self.assertIsNone(native_record)
 

@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-from Cozter import agent, agent_tools, execution_state, utils
+from Cozter import agent, agent_tools, execution_state, utils, workspace
 from Cozter.backends_agent.base import AgentResult, ChatEvent
 from Cozter.backends_agent.codex import CodexBackend
 
@@ -314,9 +314,12 @@ class ExecutionStateTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(drive.await_count, 1)
 
     async def test_internal_call_does_not_capture_worker_session_even_when_nested(self):
+        workspace.set_reasoning_effort(self.workspace, 100)
+        workspace.set_summary_reasoning_effort(self.workspace, 25)
+
         async def launch(*_args, **kwargs):
             self.assertIsNone(execution_state.current_run())
-            self.assertTrue(kwargs["compaction"])
+            self.assertEqual(kwargs, {"approval": "deny", "compaction": True, "effort": 25})
             return object()
         async def drain(*_args, **_kwargs):
             self.assertIsNone(execution_state.current_run())
