@@ -1479,8 +1479,8 @@ walking an enormous file.
 Session transcript lines (`session.format_msg_line`) carry the same honesty
 contract: capped content keeps a `… [truncated N chars total … PARTIAL +
 remainder]` marker with the suffix reserved inside the cap, and tight caps
-keep a visible ellipsis. `list_dir` and `tree` skip an entry whose `is_dir()` raises (a dangling
-symlink, ELOOP, or vanished file) instead of aborting the rest of the listing.
+keep a visible ellipsis. `list_dir` and `tree` continue when an entry's `is_dir()` check raises;
+they show that entry as a non-directory instead of aborting the listing.
 Broad workspace-root `grep` and `glob` searches in a Git checkout use tracked
 files and untracked files permitted by Git's ignore rules. This avoids scanning
 ignored build trees and archived source copies. A specific search path or directory
