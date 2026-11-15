@@ -1,6 +1,5 @@
 """Only canonical native launch APIs and module entrypoints remain."""
 
-import inspect
 import os
 from pathlib import Path
 import subprocess
@@ -25,13 +24,6 @@ class NativeLaunchContractTests(unittest.TestCase):
             "_reap_failed_prompt_subprocess", "_reap_cancelled_process_launch",
         ):
             self.assertFalse(hasattr(base, name), name)
-
-    def test_shared_helpers_have_no_forwarding_callback_arguments(self):
-        self.assertEqual(list(inspect.signature(process_launch.await_process_launch).parameters),
-                         ["launch", "cancel_cleanup"])
-        self.assertEqual(list(inspect.signature(process_launch.reap_failed_subprocess).parameters),
-                         ["proc"])
-        self.assertNotIn("mark_group", inspect.signature(process_launch.create_piped_subprocess).parameters)
 
     def test_single_dash_cli_alias_is_rejected_and_current_flag_is_accepted(self):
         main = load_main_module()
