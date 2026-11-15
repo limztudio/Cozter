@@ -292,6 +292,13 @@ limits from it. Daemon mode (`python -m Cozter` without `--cli`) validates
   Telegram and Slack need their platform tokens; Signal also requires a
   separately installed and running `signal-cli` JSON-RPC daemon.
 
+In the current Windows installation, `C:\workstation\cozter` is the
+development/parity checkout and `C:\Startup\Cozter` is the live deployment.
+Publish changes to the tracked remote and let the live checkout take them
+through its normal update pull; editing the parity checkout alone does not
+change the running deployment. Use the deployment checkout and its parent
+for the scheduled task, and the development parent for local checks.
+
 ## Deployment boundary
 
 Cozter is intended for a trusted individual or small trusted group. An
@@ -2577,6 +2584,12 @@ arrives at the end. `flexible` is the one agent that never reaches
 drives one `_drive_backend()` pass per sub-task instead, on whichever
 backend that sub-task's tier points at.
 
+Flexible records distinct completed Codex commands and file changes, and
+successful supported Antigravity inspection calls, across owner continuations.
+New recorded work resets the repeated-outstanding-work counter; repeating
+the same report without new recorded work still advances it. This progress
+evidence does not by itself resolve an outstanding obligation.
+
 ## Repository state
 
 Tracked project files are intentionally small: the top-level runtime modules
@@ -2790,6 +2803,12 @@ mirrors it on GitHub. mypy is enforced on the core runtime, agent backends,
 and tool surface; `tests/` are excluded and the chat-platform adapters are
 temporarily error-suppressed for their untyped SDK interactions, as defined
 in `mypy.ini`.
+
+The workspace verification baseline calls for at least 780 discovered tests.
+The checked-in CI commands run discovery and fail on test failures, but do
+not separately enforce a numeric test-count threshold. Check the reported
+`Ran ... tests` count when using that baseline, and investigate a lower
+count instead of treating an incomplete discovery run as equivalent.
 
 GitLab runners may check out this repository under a name other than `Cozter`.
 The canonical pipeline creates a temporary directory containing
