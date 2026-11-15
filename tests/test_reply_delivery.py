@@ -105,7 +105,6 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
                 # A later prompt must not overtake the answer.
                 self.assertEqual(queue.qsize(), 1)
 
-                # Simulate a restart via a fresh platform instance.
                 retry_bot = ReplyDeliveryBot(tmp, fail_final=False)
                 await retry_bot.restore_reply_deliveries()
                 await retry_bot._check_reply_deliveries()
@@ -300,7 +299,6 @@ class ReplyDeliveryTests(unittest.IsolatedAsyncioTestCase):
                     retry = asyncio.create_task(bot._check_reply_deliveries())
                     try:
                         await asyncio.wait_for(entered.wait(), timeout=5)
-                        # The owned retry is in flight without a held lock.
                         self.assertEqual(
                             len(bot._reply_delivery_tasks.get("u1", ())), 1,
                         )

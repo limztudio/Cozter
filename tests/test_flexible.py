@@ -763,7 +763,6 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
                 )
 
         self.assertNotIn("(no response)", result.text)
-        # The reply names the quiet tier.
         self.assertIn(f"{low_agent}/{low_model}", result.text)
 
     async def test_all_failed_workers_keep_errors_and_skip_merge(self) -> None:
@@ -974,7 +973,6 @@ class FlexibleRunTests(unittest.IsolatedAsyncioTestCase):
                     inject_queue=None, injected=[],
                 )
         self.assertFalse(restarting)
-        # Both the task and follow-up ran.
         self.assertEqual(len(calls), 2)
         # Progress shows the growing total, never a stuck denominator.
         self.assertTrue(any("[1/1]" in status for status in statuses))

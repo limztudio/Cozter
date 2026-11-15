@@ -55,15 +55,11 @@ class ContextBudgetTests(unittest.TestCase):
             "NEW MESSAGE", dict(data), budget=3_000,
         )
 
-        # The new message survives at any budget.
         self.assertIn("NEW MESSAGE", large_budget_prompt)
         self.assertIn("NEW MESSAGE", small_budget_prompt)
-        # A tight budget drops older messages...
         self.assertLess(len(small_budget_prompt), len(large_budget_prompt))
-        # ...but the newest message is retained in both.
         self.assertIn("message number 49", large_budget_prompt)
         self.assertIn("message number 49", small_budget_prompt)
-        # ...while the oldest is dropped under the tight budget.
         self.assertIn("message number 0", large_budget_prompt)
         self.assertNotIn("message number 0 ", small_budget_prompt)
 

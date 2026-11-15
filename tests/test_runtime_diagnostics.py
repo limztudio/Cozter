@@ -244,7 +244,6 @@ class DumpRuntimeDiagnosticsTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.mkdtemp()
         self._main = load_main_module()
-        # Point LOG_DIR at temp for a fresh diagnostics.log.
         self._orig_log_dir = self._main.LOG_DIR
         self._orig_dump_file = self._main._dump_file
         self._faulthandler_was_enabled = faulthandler.is_enabled()
@@ -298,7 +297,6 @@ class DumpRuntimeDiagnosticsTests(unittest.TestCase):
             def has_active_turns(self):
                 raise RuntimeError("boom")
 
-        # Should not raise; error captured inline.
         self._main.dump_runtime_diagnostics([_BrokenBot()])
         body = self._read_dump()
         self.assertIn("test:broken", body)

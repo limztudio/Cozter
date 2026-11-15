@@ -178,9 +178,7 @@ class AntigravityCliBackend(CachedModelCatalog, Backend):
         *, model_flag: str = "--model", effort_flag: str | None = "--effort",
         effort_template: str = "{effort}",
     ) -> None:
-        # Agy's model catalog encodes effort in each slug. Passing a different
-        # --effort alongside that slug is rejected, so choose the catalog
-        # variant directly instead of sending conflicting flags.
+        # Effort is part of the model slug; a conflicting flag is rejected.
         level = effort_band(effort, self.effort_levels_for_model(model))
         selected = model
         if level is not None:

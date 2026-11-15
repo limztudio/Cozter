@@ -5,7 +5,6 @@ on:
     branches: [main]
   pull_request:
 
-# Read-only: test jobs never write back.
 permissions:
   contents: read
 
@@ -21,7 +20,6 @@ jobs:
       - uses: actions/checkout@v6
         with:
           path: Cozter
-          # Never push/fetch submodules: keep the workflow token out of git config.
           persist-credentials: false
 
       - uses: actions/setup-python@v6
@@ -45,5 +43,4 @@ jobs:
         run: PYTHONPATH="$PWD" mypy --config-file Cozter/mypy.ini --python-version ${{ matrix.python-version }} -p Cozter
 
       - name: Tests (unittest)
-        # Verbose output records every executed and skipped test in the job log.
         run: PYTHONPATH="$PWD" python -m unittest discover -s Cozter/tests -v

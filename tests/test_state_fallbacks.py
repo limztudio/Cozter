@@ -419,7 +419,6 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             self.assertEqual(config.get_extra_models("codex"), [])
         finally:
             config.CONFIG_PATH = old
-        # extra_models not an object -> [].
         with temporary_config({"extra_models": ["oops"]}):
             self.assertEqual(config.get_extra_models("codex"), [])
 
@@ -470,7 +469,6 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
             )
             workspace.set_history_budget(tmp, 8_000)
             self.assertEqual(workspace.get_history_budget(tmp), 8_000)
-            # Malformed stored value falls back to default.
             with open(
                 os.path.join(tmp, ".cozter", "settings.json"),
                 "w",
@@ -538,7 +536,6 @@ class WorkspaceStateFallbackTests(unittest.TestCase):
                     ) as file_handle:
                         json.dump({key: "7"}, file_handle)
                     self.assertEqual(getter(tmp), 7)
-                    # Unparseable text still falls back to the default.
                     with open(
                         os.path.join(tmp, ".cozter", "settings.json"),
                         "w",
@@ -782,7 +779,6 @@ class RuntimeHardeningConfigTests(unittest.TestCase):
         with temporary_config({"dump_traceback_interval": 30}):
             self.assertEqual(config.get_dump_traceback_interval(), 30)
 
-        # 0 is a legal "off" value.
         with temporary_config({"dump_traceback_interval": 0}):
             self.assertEqual(config.get_dump_traceback_interval(), 0)
 

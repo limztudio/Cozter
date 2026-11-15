@@ -3434,7 +3434,6 @@ async def _run_flexible(
                 elif not result.text:
                     append_text_result(result, cached_output.get("terminal_text", "PARTIAL: the current task remains unfinished."))
                 return result, False
-            # Worker text is internal (feeds the merge).
             result.events.extend(
                 event for event in sub_result.events if event.kind != "text"
             )

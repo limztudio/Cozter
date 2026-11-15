@@ -297,7 +297,6 @@ PERMISSION_DESCRIPTIONS = {
     ),
 }
 
-# Interaction style: picks the shared prompt policy.
 AVAILABLE_STYLES = ["collaborative", "autonomous"]
 DEFAULT_STYLE = "collaborative"
 STYLE_DESCRIPTIONS = {
@@ -308,7 +307,6 @@ STYLE_DESCRIPTIONS = {
     "autonomous": "Decide and proceed without asking (full-auto)",
 }
 
-# Reasoning effort 0-100 (0 = backend default).
 DEFAULT_REASONING_EFFORT = 0
 
 
