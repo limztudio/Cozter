@@ -2560,9 +2560,10 @@ that owns them:
   `workspace.py` (including `ensure_workspace_state_dir()`), `session.py`,
   `schedules.py`, `compaction.py`, and `colony.py`. Hot JSON reads
   (`config.json`, workspace state/settings, colony, last-session pointers,
-  and per-workspace schedules) are cached by file mtime+size via the shared
-  `utils.stat_mtime_size()` helper, so repeated per-turn/per-tool reads skip
-  re-parsing until an edit changes mtime/size
+  and per-workspace schedules) are cached by file mtime, size, and content
+  digest via shared `utils` helpers. Repeated reads still check file content
+  but skip re-parsing when it is unchanged; the digest detects same-size edits
+  even when the filesystem timestamp does not change
 - CI and local quality gates: `.gitlab-ci.yml`, `.github/workflows/ci.yml`,
   `mypy.ini`, `pyproject.toml`, and `tests/`
 
