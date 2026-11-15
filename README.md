@@ -2374,6 +2374,11 @@ ID and name, and 128 tool calls. A per-completion limit breach is handled as
 a retryable failure before any buffered tool call executes. Tool-argument
 fragments are joined only after a completion finishes, which avoids repeated
 copying as a long streamed argument arrives.
+Malformed or non-object tool arguments invalidate the whole generated batch
+before any call runs; Cozter retries the completion. On recovery, invalid
+historical arguments are repaired for provider compatibility with an audit of
+the original values, while saved outcomes are retained and completed tools are
+not replayed.
 If a provider ends with `finish_reason: "length"` while a tool call is
 pending, Cozter uses its configured retry budget rather than executing
 potentially partial arguments; a text-only length-limited reply is delivered
