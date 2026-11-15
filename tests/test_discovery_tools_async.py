@@ -2,11 +2,13 @@
 
 import asyncio
 import os
+import re
 import tempfile
 import threading
 import unittest
 from unittest import mock
 
+from Cozter import agent_tools
 from Cozter.agent_tools.builtin.glob import GlobTool
 from Cozter.agent_tools.builtin.list_dir import ListDirTool
 from Cozter.agent_tools.builtin.tree import TreeTool
@@ -21,6 +23,52 @@ async def _wait_for_start(start: threading.Event) -> None:
 
 
 class DiscoveryToolAsyncTests(unittest.TestCase):
+    def test_dispatch_pages_long_names_without_losing_entries(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as workspace:
+                names = [f"{index:04d}" + "x" * 175 for index in range(200)]
+                for name in names:
+                    with open(os.path.join(workspace, name), "w", encoding="utf-8"):
+                        pass
+                for tool_name, limit in (("list_dir", "max_results"), ("tree", "max_entries")):
+                    offset = 0
+                    seen = []
+                    while True:
+                        result = await agent_tools.execute_tool(
+                            tool_name, {limit: 1000, "offset": offset}, workspace,
+                            "full", lambda _event: None,
+                        )
+                        rows = result.splitlines()
+                        marker = re.search(r"offset=(\d+)", rows[-1])
+                        seen.extend(rows[:-1] if marker else rows)
+                        if not marker:
+                            break
+                        next_offset = int(marker.group(1))
+                        self.assertGreater(next_offset, offset)
+                        offset = next_offset
+                    self.assertEqual(seen, names)
+
+        asyncio.run(run())
+
+    def test_paging_reaches_entries_beyond_both_limits(self) -> None:
+        async def run() -> None:
+            with tempfile.TemporaryDirectory() as workspace:
+                for index in range(2001):
+                    with open(os.path.join(workspace, f"{index:04}.txt"), "w", encoding="utf-8"):
+                        pass
+                listing = ListDirTool()
+                first = await listing.run(workspace, {"max_results": 1000})
+                last = await listing.run(workspace, {"max_results": 1000, "offset": 2000})
+                self.assertIn("offset=1000", first)
+                self.assertEqual(last, "2000.txt")
+                tree = TreeTool()
+                first = await tree.run(workspace, {"max_entries": 2000})
+                last = await tree.run(workspace, {"max_entries": 2000, "offset": 2000})
+                self.assertIn("offset=2000", first)
+                self.assertEqual(last, "2000.txt")
+
+        asyncio.run(run())
+
     def test_list_dir_scan_runs_off_the_event_loop(self) -> None:
         async def run() -> None:
             started = threading.Event()

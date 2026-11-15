@@ -15,12 +15,14 @@ from ..base import (
     resolve_inside_workspace,
     summarize_path,
 )
+from ..discovery import DISCOVERY_RESULT_MAX, render_discovery_page
 
 
 class TreeTool(AgentTool):
     name = "tree"
     order = 30  # group with the discovery tools (list_dir/glob/grep)
     description = "Directory tree (dirs first; page remainder when truncated)."
+    max_result_chars = DISCOVERY_RESULT_MAX
     parameters = object_parameters(
         {
             "path": {"type": "string"},
@@ -28,6 +30,10 @@ class TreeTool(AgentTool):
             "max_entries": {
                 "type": "integer",
                 "description": "max 2000.",
+            },
+            "offset": {
+                "type": "integer",
+                "description": "Entries to skip; restart at zero if the tree changes.",
             },
         },
         [],
@@ -48,6 +54,7 @@ class TreeTool(AgentTool):
         max_entries = coerce_int_arg(
             args.get("max_entries", 200), default=200, minimum=1, maximum=2000,
         )
+        offset = coerce_int_arg(args.get("offset", 0), default=0, minimum=0, maximum=2**63 - 2001)
 
         lines: list[str] = []
         workspace_root = (
@@ -55,19 +62,15 @@ class TreeTool(AgentTool):
             if get_tool_permission() != "full" else None
         )
         truncated = await asyncio.to_thread(
-            self._walk, root, 0, depth, "", lines, max_entries,
+            self._walk, root, 0, depth, "", lines, offset + max_entries,
             workspace_root=workspace_root,
         )
+        lines = lines[offset:]
         if not lines:
-            return "(empty)"
+            return f"No more entries at offset {offset}" if offset else "(empty)"
         if truncated:
-            lines.append(
-                f"… (truncated at {max_entries} entries;"
-                " remainder omitted — raise max_entries to fetch the rest;"
-                " never treat this preview as full coverage; say PARTIAL"
-                " + remainder when coverage is unclear)"
-            )
-        return "\n".join(lines)
+            lines.append("")
+        return render_discovery_page(lines, offset=offset, max_results=max_entries)
 
     def _walk(
         self, path: str, level: int, max_depth: int,

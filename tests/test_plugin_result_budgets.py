@@ -10,6 +10,7 @@ from unittest import mock
 from Cozter import agent_tools
 from Cozter.agent_tools.builtin import web_fetch
 from Cozter.agent_tools.plugins import http_request
+from Cozter.agent_tools.plugins.calculator import CalculatorTool
 from Cozter.agent_tools.plugins.git_info import GitInfoTool
 from Cozter.agent_tools.plugins.git_ops import GitOpsTool
 from Cozter.agent_tools.plugins.git_sync import GitSyncTool
@@ -52,6 +53,11 @@ class PluginCliHelpTests(unittest.TestCase):
 class PluginResultBudgetTests(unittest.IsolatedAsyncioTestCase):
     async def dispatch(self, name, args=None):
         return await agent_tools.execute_tool(name, args or {}, ".", "full", lambda _event: None)
+
+    async def test_large_exact_calculator_result_survives_dispatch(self):
+        tool = CalculatorTool()
+        with mock.patch.dict(agent_tools.TOOLS_BY_NAME, {tool.name: tool}):
+            self.assertEqual(await self.dispatch(tool.name, {"expression": "10**5000"}), "1" + "0" * 5000)
 
     async def test_http_request_preserves_the_requested_body_and_metadata(self):
         body = "request-body-" * 900

@@ -78,6 +78,11 @@ class CalculatorResponsivenessTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await tool.run(".", {"expression": expression}), expected)
         self.assertEqual(await tool.run(".", {"expression": "x" * 1001}), "Error: expression exceeds 1000 characters")
 
+    async def test_large_signed_result_exceeds_python_decimal_conversion_limit(self) -> None:
+        tool = calculator.CalculatorTool()
+        self.assertEqual(await tool.run(".", {"expression": "10**5000"}), "1" + "0" * 5000)
+        self.assertEqual(await tool.run(".", {"expression": "-(10**5000 + 1)"}), "-1" + "0" * 4999 + "1")
+
 
 if __name__ == "__main__":
     unittest.main()

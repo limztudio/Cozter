@@ -224,7 +224,15 @@ def _format(value: Any) -> str:
     if isinstance(value, complex):
         raise _CalculationError("result is not a real number (complex)")
     if isinstance(value, int):
-        return str(value)
+        negative = value < 0
+        value = abs(value)
+        chunks: list[int] = []
+        base = 10 ** 500
+        while value >= base:
+            value, chunk = divmod(value, base)
+            chunks.append(chunk)
+        result = str(value) + "".join(f"{chunk:0500d}" for chunk in reversed(chunks))
+        return "-" + result if negative else result
     if isinstance(value, float):
         if not math.isfinite(value):
             raise _CalculationError("result is not finite (overflow or domain error)")
@@ -274,6 +282,7 @@ class CalculatorTool(AgentTool):
     name = "calculator"
     order = 20
     parallel_safe = True
+    max_result_chars = _MAX_RESULT_DIGITS + 2
     description = "Exact math."
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",

@@ -14,11 +14,13 @@ from ..base import (
     resolve_tool_path,
     summarize_path,
 )
+from ..discovery import DISCOVERY_RESULT_MAX, render_discovery_page
 
 
 class ListDirTool(AgentTool):
     name = "list_dir"
     description = "List a directory (page remainder when truncated)."
+    max_result_chars = DISCOVERY_RESULT_MAX
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",
         "properties": {
@@ -26,6 +28,10 @@ class ListDirTool(AgentTool):
             "max_results": {
                 "type": "integer",
                 "description": "max 1000.",
+            },
+            "offset": {
+                "type": "integer",
+                "description": "Entries to skip; restart at zero if the directory changes.",
             },
         },
     }
@@ -47,26 +53,23 @@ class ListDirTool(AgentTool):
             minimum=1,
             maximum=1000,
         )
+        offset = coerce_int_arg(args.get("offset", 0), default=0, minimum=0, maximum=2**63 - 2001)
 
         try:
             lines, entry_count = await asyncio.to_thread(
-                self._list_entries, target, max_results,
+                self._list_entries, target, offset + max_results,
             )
         except OSError as exc:
             return f"List failed: {exc}"
 
+        lines = lines[offset:]
         if not lines:
-            return f"Directory is empty: {raw_path}"
+            return f"No more entries at offset {offset}: {raw_path}" if offset else f"Directory is empty: {raw_path}"
 
-        if entry_count > max_results:
-            lines.append(
-                f"… ({entry_count - max_results} more entries;"
-                " remainder omitted — raise max_results to fetch the rest;"
-                " never treat this preview as full coverage; say PARTIAL"
-                " + remainder when coverage is unclear)"
-            )
+        if entry_count > offset + max_results:
+            lines.append("")
 
-        return "\n".join(lines)
+        return render_discovery_page(lines, offset=offset, max_results=max_results)
 
     @staticmethod
     def _list_entries(
