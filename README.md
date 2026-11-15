@@ -1188,8 +1188,10 @@ same occurrence twice.
 notices time out after four seconds so a slow chat connection cannot hold
 the scheduler or agent indefinitely. They run autonomously and can
 not overtake an unfinished job that is waiting for a collaborative
-`[[await]]` answer. CLI mode accepts `/reserve` but does not currently run a
-scheduler or restore queued turns after a restart.
+`[[await]]` answer. A separate answer pause armed after delivery of a completed
+reply holds normal chat entries, but scheduled entries may still run. CLI mode
+accepts `/reserve` but does not currently run a scheduler or restore queued turns
+after a restart.
 
 ## Files and attachments
 
@@ -2124,8 +2126,8 @@ workspace:
   question and ends with `[[await]]`, pausing the queue until you reply.
   Small, reversible choices are made without asking. This is a
   backend-agnostic prompt policy, so it steers every backend (codex,
-  copilot, claude_code, grok, llama, meta, zai) the same way — not just the CLIs that
-  ask on their own.
+  copilot, claude_code, grok, antigravity_cli, llama, meta, zai) the same
+  way — not just the CLIs that ask on their own.
 - `autonomous` — the agent decides and proceeds without asking, closer to
   a full-auto run.
 
