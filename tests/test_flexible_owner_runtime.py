@@ -264,38 +264,62 @@ class FlexibleOwnerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.record.get("lease_rounds")["0"], 3)
         self.assertEqual(self.internal_labels, ["Flexible planner"])
 
-    async def test_tier_changed_identical_followup_is_one_bounded_obligation_and_terminal_resume_is_cached(self):
+    async def test_repeat_limit_reports_unfinished_scope_and_latest_evidence_on_cached_resume(self):
         self.plan = owner_plan(specialists=[])
         calls = []
         roles = []
         hints = ("high", "mid", "low", "high")
+        repeated = "Verify dependent cache export"
+        other_pending = "Check the generated workspace registration"
+        earlier_report = "The first build could not locate the registry fixture."
+        latest_report = "The rebuild passed, but the generated export still points to the old registry entry."
 
         async def drive(backend, _ws, prompt, *_args, **_kwargs):
             self.assertEqual(backend.name, "llama")
             roles.append((await execution_state.record("repeated-owner-role-probe")).key)
             calls.append(prompt)
             if len(calls) == 2:
-                self.assertIn("Verify dependent cache export", prompt)
-            return AgentResult(text=f"PARTIAL: dependency unresolved.\n[followup:{hints[len(calls) - 1]}] "
-                                    "Verify dependent cache export", usage={"input_tokens": 2}), False
+                self.assertIn(repeated, prompt)
+            if len(calls) == len(hints):
+                text = f"{latest_report}\n[followup:high] {repeated}\n[followup:mid] {other_pending}"
+            else:
+                text = f"{earlier_report}\n[followup:{hints[len(calls) - 1]}] {repeated}"
+            return AgentResult(text=text, usage={"input_tokens": 2}), False
 
         result, restarting = await self.invoke(drive)
 
         self.assertFalse(restarting)
         self.assertIn("repeatedly returned unresolved obligations", result.error)
+        self.assertIn("Unfinished work", result.text)
+        self.assertIn(repeated, result.text)
+        self.assertIn(other_pending, result.text)
+        self.assertIn("Latest owner report", result.text)
+        self.assertIn(latest_report, result.text)
+        self.assertNotIn(earlier_report, result.text)
+        self.assertNotIn("[followup:", result.text)
         self.assertFalse(result.completion_verified)
         self.assertEqual(len(calls), 4)
         self.assertEqual(len(set(roles)), 1)
         self.assertEqual(self.record.get("cursor"), 0)
         obligations = self.record.get("owner_obligations")["0"]
-        self.assertEqual(len(obligations), 1)
-        self.assertEqual(obligations[0]["repeats"], 3)
+        self.assertEqual(
+            [(row["instruction"], row["repeats"], row["resolved"]) for row in obligations],
+            [(repeated, 3, False), (other_pending, 0, False)],
+        )
         self.assertEqual(self.record.get("usage_processed_audit"), {"input_tokens": 8})
 
+        worker_outputs = self.record.get("worker_outputs")
+        worker_outputs["0"]["terminal_text"] = (
+            "PARTIAL: The same owner returned the same unfinished scope after three supplied continuations "
+            "without resolving it or requesting specialist help. Its evidence and obligations are saved.\n"
+            "The current task and its dependent work remain unfinished."
+        )
+        await self.record.save(worker_outputs=worker_outputs)
         resumed, restarting = await self.invoke(drive)
 
         self.assertFalse(restarting)
         self.assertEqual(resumed.error, result.error)
+        self.assertEqual(resumed.text, result.text)
         self.assertFalse(resumed.completion_verified)
         self.assertEqual(len(calls), 4)
         self.assertEqual(self.record.get("usage_processed_audit"), {"input_tokens": 8})

@@ -70,6 +70,8 @@ class _TurnBudgetExhaustedError(Exception):
 CONTINUATION_CHECKPOINT_CHARS = 64_000
 _CONTINUATION_CHECKPOINT_ITEMS = flexible.MAX_SUBTASKS * 4
 _DEFAULT_PENDING_SCOPE = "Verify completion of the full original request and finish any remaining work."
+_OWNER_REPEAT_LIMIT = 3
+_OWNER_REPEAT_ERROR = "Flexible owner repeatedly returned unresolved obligations."
 
 
 def _checkpoint_scope(instruction: str, request: str) -> str:
@@ -2507,6 +2509,33 @@ def _new_owner_obligation(instruction: str, rows: list[dict[str, Any]]) -> dict[
             "instruction": instruction, "repeats": 0, "resolved": False}
 
 
+def _owner_repeat_details(obligations: list[dict[str, Any]], report: str) -> str:
+    open_items = sorted(
+        (item for item in obligations if not item["resolved"]),
+        key=lambda item: item["repeats"], reverse=True,
+    )
+    unfinished = flexible.bounded_draft_excerpt(
+        "\n".join(f"- {item['instruction']}" for item in open_items), limit=1400,
+    )
+    report, _ = extract_await(report)
+    report, _ = _split_attach_markers(report)
+    evidence = "\n".join(
+        line for line in report.splitlines() if not flexible.parse_followups(line)
+    ).strip()
+    evidence = flexible.bounded_draft_excerpt(evidence, limit=2000)
+    details = (
+        f"The owner kept reporting the same unfinished work after {_OWNER_REPEAT_LIMIT}"
+        " continuations. Its progress is saved."
+    )
+    if unfinished:
+        details += f"\n\nUnfinished work\n{unfinished}"
+    if evidence:
+        details += f"\n\nLatest owner report\n{evidence}"
+    else:
+        details += "\n\nThe owner supplied no further detail about what prevented completion."
+    return details
+
+
 async def _continue_flexible_owner(instruction: str, draft: str) -> bool:
     """Reopen the same owner with remaining work and a fresh phase outcome."""
     saved = await execution_state.record("flexible_plan")
@@ -2852,7 +2881,7 @@ async def _run_flexible(
                         or row["id"] in seen_owner_scopes
                         or not isinstance(row.get("resolved"), bool)
                         or not isinstance(row.get("repeats"), int) or isinstance(row["repeats"], bool)
-                        or not 0 <= row["repeats"] <= 3):
+                        or not 0 <= row["repeats"] <= _OWNER_REPEAT_LIMIT):
                     raise ValueError("Saved Flexible owner obligation is invalid")
                 seen_owner_scopes.add(row["id"])
         if any(not isinstance(key, str) or not isinstance(value, int) or isinstance(value, bool)
@@ -3178,11 +3207,14 @@ async def _run_flexible(
                 await save_progress()
         return sub_result, restarting
 
+    def hold_text(details: str) -> str:
+        return "PARTIAL: " + details + "\nThe current task and its dependent work remain unfinished."
+
     async def hold_current(message: str, details: str) -> tuple[AgentResult, bool]:
         result.error = message
         result.completion_verified = False
         result.usage = usage_totals or None
-        append_text_result(result, "PARTIAL: " + details + "\nThe current task and its dependent work remain unfinished.")
+        append_text_result(result, hold_text(details))
         worker_outputs.setdefault(str(done), {})["terminal_error"] = message
         worker_outputs[str(done)]["terminal_text"] = flexible.truncate_report(result.text)
         if budget is not None:
@@ -3396,7 +3428,10 @@ async def _run_flexible(
             if cached_output.get("terminal_error"):
                 result.error = cached_output["terminal_error"]
                 result.completion_verified = False
-                if not result.text:
+                if owner_mode and result.error == _OWNER_REPEAT_ERROR:
+                    details = _owner_repeat_details(owner_obligations.get(str(done), []), sub_result.text)
+                    append_text_result(result, hold_text(details))
+                elif not result.text:
                     append_text_result(result, cached_output.get("terminal_text", "PARTIAL: the current task remains unfinished."))
                 return result, False
             # Worker text is internal (feeds the merge).
@@ -3456,7 +3491,7 @@ async def _run_flexible(
                             )
                         obligations.append(_new_owner_obligation(extra.instruction, obligations))
                     elif obligations.index(existing) < delivered:
-                        existing["repeats"] = min(3, existing["repeats"] + 1)
+                        existing["repeats"] = min(_OWNER_REPEAT_LIMIT, existing["repeats"] + 1)
                 cached_output["owner_followups_processed"] = True
 
             if owner_mode and sub_result.continuation_reason:
@@ -3564,12 +3599,11 @@ async def _run_flexible(
             if (owner_mode and reported_followups and not sub_result.error
                     and not sub_result.continuation_reason and not worker_awaiting
                     and not sub_result.detached_tasks):
-                if any(not item["resolved"] and item["repeats"] >= 3
-                       for item in owner_obligations.get(str(done), [])):
+                obligations = owner_obligations.get(str(done), [])
+                if any(not item["resolved"] and item["repeats"] >= _OWNER_REPEAT_LIMIT for item in obligations):
                     return await hold_current(
-                        "Flexible owner repeatedly returned unresolved obligations.",
-                        "The same owner returned the same unfinished scope after three supplied continuations "
-                        "without resolving it or requesting specialist help. Its evidence and obligations are saved.",
+                        _OWNER_REPEAT_ERROR,
+                        _owner_repeat_details(obligations, cached_output.get("text", "")),
                     )
                 if budget is not None:
                     scope = _checkpoint_scope(task.instruction, request)
