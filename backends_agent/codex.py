@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import os
 import shutil
 import subprocess
 import threading
@@ -17,7 +18,7 @@ from .base import (
     MODEL_CATALOG_TTL_SEC, AgentResult, Backend, ChatEvent, append_text_result,
     attachment_image_paths,
     executable_command, fallback_model_tables,
-    record_backend_error,
+    record_backend_error, record_completed_work,
     truncate_status_text,
 )
 
@@ -397,11 +398,16 @@ class CodexBackend(Backend):
                 if output:
                     summary += f"\n{truncate_status_text(output)}"
                 result.events.append(ChatEvent(kind="tool", content=summary))
+                if (type(exit_code) is int and exit_code == 0
+                        and item.get("status", "completed") == "completed"
+                        and isinstance(cmd, str) and cmd.strip() and "command" in item):
+                    record_completed_work(result, "command", cmd.strip())
 
             elif item_type == "file_change":
                 changes = item.get("changes")
                 if not isinstance(changes, list):
                     return
+                applied = item.get("status") == "completed"
                 for change in changes:
                     if not isinstance(change, dict):
                         continue
@@ -411,6 +417,9 @@ class CodexBackend(Backend):
                         kind="file",
                         content=f"📄 {kind}: {path}",
                     ))
+                    if (applied and isinstance(kind, str) and kind in {"add", "delete", "update"}
+                            and isinstance(path, str) and path.strip() and "\0" not in path):
+                        record_completed_work(result, "file_change", (kind, os.path.normcase(os.path.normpath(path))))
 
         elif event_type == "turn.completed":
             usage = event.get("usage")

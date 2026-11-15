@@ -14,7 +14,7 @@ from ..process_launch import (
 )
 from .base import (
     AgentResult, Backend, CachedModelCatalog, ChatEvent, NativeSessionUnavailableError,
-    effort_band, fresh_model_catalog, record_backend_error,
+    effort_band, fresh_model_catalog, record_backend_error, record_completed_work,
     resolve_executable_prefix, summarize_cli_tool, truncate_status_text,
 )
 
@@ -32,6 +32,10 @@ _MODELS = (
     "gpt-oss-120b-medium",
 )
 _EFFORTS = ("low", "medium", "high", "xhigh", "max")
+_COMPLETED_INSPECTION_TOOLS = frozenset({
+    "find_by_name", "grep_search", "list_dir", "read_file", "view_code_item", "view_file",
+    "view_file_outline",
+})
 _RESUME_STARTUP_TIMEOUT = 30
 _STARTUP_STDERR_BYTES = 64 * 1024
 
@@ -372,13 +376,19 @@ class AntigravityCliBackend(CachedModelCatalog, Backend):
                 info = step.get("tool_info")
                 if not isinstance(info, dict):
                     info = {}
+                name = step.get("tool_name") or info.get("name")
+                parameters = info.get("parameters")
                 result.events.append(ChatEvent(
-                    kind="tool", content=summarize_cli_tool(step.get("tool_name") or info.get("name"), info.get("parameters")),
+                    kind="tool", content=summarize_cli_tool(name, parameters),
                 ))
                 error = info.get("error")
                 output = error.get("message") if isinstance(error, dict) else info.get("output")
                 if isinstance(output, str) and output:
                     result.events.append(ChatEvent(kind="tool", content=truncate_status_text(output)))
+                if (step.get("state") == "DONE" and error is None and isinstance(output, str)
+                        and isinstance(name, str) and name in _COMPLETED_INSPECTION_TOOLS
+                        and isinstance(parameters, dict) and parameters):
+                    record_completed_work(result, name, parameters)
             else:
                 setattr(result, "_antigravity_step_index", None)
                 setattr(result, "_antigravity_step_has_text", False)

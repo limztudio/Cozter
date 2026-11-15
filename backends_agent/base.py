@@ -16,12 +16,14 @@ from typing import Literal, TypedDict
 
 from ..utils import (
     clip_status_value,
+    json_digest,
 )
 
 MODEL_CATALOG_TTL_SEC = 60.0
 _DETACHED_UNSUPPORTED_SUFFIX = "does not support detached tasks"
 # CLI probe timeouts (copilot/HTTP use their own).
 CLI_MODEL_DISCOVERY_TIMEOUT_SEC = 15
+MAX_COMPLETED_WORK = 4096
 
 
 class NativeSessionUnavailableError(Exception):
@@ -513,6 +515,13 @@ class AgentResult:
     terminal_result_received: bool = False
     # A missing fix stays open; never mark it done or gated.
     blocked_reason: str = ""
+    completed_work: set[str] = field(default_factory=set, repr=False)
+
+
+def record_completed_work(result: AgentResult, operation: str, target: object) -> None:
+    """Remember a completed operation by its input, independent of IDs and output."""
+    if len(result.completed_work) < MAX_COMPLETED_WORK:
+        result.completed_work.add(json_digest([operation, target]))
 
 
 def append_text_result(result: AgentResult, text: str) -> None:

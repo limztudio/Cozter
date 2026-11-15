@@ -7,7 +7,7 @@ import unittest
 from unittest import mock
 
 from Cozter import execution_state
-from Cozter.backends_agent.base import AgentResult
+from Cozter.backends_agent.base import AgentResult, record_completed_work
 from Cozter.tests import test_flexible_tier_leases as lease_fixture
 
 
@@ -323,4 +323,67 @@ class FlexibleOwnerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(resumed.completion_verified)
         self.assertEqual(len(calls), 4)
         self.assertEqual(self.record.get("usage_processed_audit"), {"input_tokens": 8})
+        self.assertEqual(self.internal_labels, ["Flexible planner"])
+
+    async def test_distinct_completed_reads_keep_owner_working_until_evidence_stops_changing(self):
+        self.plan = owner_plan(specialists=[])
+        remaining = "Finish the full source coverage review and repeat it without findings"
+        inspected = (
+            "core/cache.cpp:1-120",
+            "core/cache.cpp:121-240",
+            "core/cache_export.cpp:1-150",
+            "tests/cache_export_test.cpp:1-160",
+        )
+        reports = iter([
+            *((target, f"Reviewed {target}; no edits needed.") for target in inspected),
+            (inspected[-1], "Rechecked the existing cache export test reads."),
+            None,  # Interrupt before the next result is available.
+            (inspected[-1], "The existing test evidence still covers the same file range."),
+            (inspected[-1], "The earlier test inspection still holds. No new range was reviewed."),
+        ])
+        calls = []
+        completed_reads = set()
+
+        async def drive(backend, _ws, prompt, model, approval, *, effort, **_kwargs):
+            role = (await execution_state.record("repeated-owner-read-role-probe")).key
+            calls.append((backend.name, model, approval, effort, role))
+            if len(calls) == 2:
+                self.assertIn(remaining, prompt)
+            evidence = next(reports)
+            if evidence is None:
+                raise asyncio.CancelledError
+            target, report = evidence
+            result = AgentResult(text=f"{report}\n[followup:low] {remaining}", usage={"input_tokens": 2})
+            record_completed_work(result, "read_files", target)
+            completed_reads.update(result.completed_work)
+            return result, False
+
+        with self.assertRaises(asyncio.CancelledError):
+            await self.invoke(drive)
+        self.assertEqual(len(calls), 6)
+        self.assertEqual(len(completed_reads), 4)
+        self.assertCountEqual(self.record.get("owner_completed_work"), completed_reads)
+        self.assertEqual(self.record.get("owner_obligations")["0"][0]["repeats"], 1)
+        self.assertEqual(self.record.get("cursor"), 0)
+
+        result, restarting = await self.invoke(drive)
+
+        self.assertFalse(restarting)
+        self.assertIn("repeatedly returned unresolved obligations", result.error)
+        self.assertIn(remaining, result.text)
+        self.assertIn("No new range was reviewed.", result.text)
+        self.assertFalse(result.completion_verified)
+        self.assertEqual(len(calls), 8)
+        self.assertEqual(len(set(calls)), 1)
+        self.assertEqual(self.record.get("owner_obligations")["0"][0]["repeats"], 3)
+        self.assertCountEqual(self.record.get("owner_completed_work"), completed_reads)
+
+        cached, restarting = await self.invoke(drive)
+
+        self.assertFalse(restarting)
+        self.assertEqual((cached.error, cached.text), (result.error, result.text))
+        self.assertEqual(len(calls), 8)
+        self.assertEqual(self.record.get("owner_obligations")["0"][0]["repeats"], 3)
+        self.assertCountEqual(self.record.get("owner_completed_work"), completed_reads)
+        self.assertEqual(self.record.get("cursor"), 0)
         self.assertEqual(self.internal_labels, ["Flexible planner"])

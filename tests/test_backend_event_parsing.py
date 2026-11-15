@@ -73,6 +73,28 @@ class CodexParseTests(unittest.TestCase):
         self.assertEqual(len(result.events), 1)
         self.assertIn("a.py", result.events[0].content)
 
+    def test_completed_work_requires_success_and_deduplicates_replayed_actions(self) -> None:
+        command = {"type": "command_execution", "command": "git diff", "exit_code": 0}
+        patch = {"type": "file_change", "changes": [{"path": "a.py", "kind": "update"}]}
+        result = _run(self.backend, [
+            {"type": "item.started", "item": command},
+            {"type": "item.completed", "item": {**command, "exit_code": False}},
+            {"type": "item.completed", "item": {**command, "exit_code": 1}},
+            {"type": "item.completed", "item": {**command, "status": "failed"}},
+            {"type": "item.completed", "item": {**command, "command": " "}},
+            {"type": "item.completed", "item": {**patch, "status": "failed"}},
+        ])
+        self.assertFalse(result.completed_work)
+
+        for item in (
+            {**command, "id": "one", "aggregated_output": "original output"},
+            {**command, "id": "two", "command": " git diff ", "aggregated_output": "noisy output"},
+            {**patch, "status": "completed"},
+            {**patch, "status": "completed", "changes": [{"path": "./a.py", "kind": "update"}]},
+        ):
+            self.backend.parse_event({"type": "item.completed", "item": item}, result)
+        self.assertEqual(len(result.completed_work), 2)
+
     def test_late_turn_failed_never_overwrites_the_answer(self) -> None:
         result = _run(self.backend, [
             {"type": "item.completed",

@@ -29,7 +29,7 @@ from . import workspace as workspace_mod
 from .agent_tools.base import copy_file_atomically
 from .agent_tools.owned_worker import run_owned_worker
 from .backends_agent.base import (
-    DOC_FOLLOWING_RULE, NO_RESPONSE_TEXT, SHELL_INPUT_RULE, WHOLE_SCOPE_RULE, AgentResult,
+    DOC_FOLLOWING_RULE, MAX_COMPLETED_WORK, NO_RESPONSE_TEXT, SHELL_INPUT_RULE, WHOLE_SCOPE_RULE, AgentResult,
     ChatEvent, ContinuationCheckpoint, ContinuationReason, ContinuationReport,
     NativeSessionUnavailableError,
     append_detached_task_request,
@@ -2536,6 +2536,14 @@ def _owner_repeat_details(obligations: list[dict[str, Any]], report: str) -> str
     return details
 
 
+def _restore_completed_work(value: object) -> set[str]:
+    if (not isinstance(value, list) or len(value) > MAX_COMPLETED_WORK
+            or any(not isinstance(key, str) or re.fullmatch(r"[0-9a-f]{64}", key) is None
+                   for key in value)):
+        raise ValueError("Saved Flexible completed work is invalid")
+    return set(value)
+
+
 async def _continue_flexible_owner(instruction: str, draft: str) -> bool:
     """Reopen the same owner with remaining work and a fresh phase outcome."""
     saved = await execution_state.record("flexible_plan")
@@ -2791,6 +2799,7 @@ async def _run_flexible(
     interim_followups: dict[str, list[dict[str, Any]]] = {}
     owner_obligations: dict[str, list[dict[str, Any]]] = {}
     owner_delivery: dict[str, int] = {}
+    owner_completed_work: set[str] = set()
 
     def encode_output(value: AgentResult, *, text: bool = False) -> dict:
         encoded: dict[str, Any] = {
@@ -2813,6 +2822,8 @@ async def _run_flexible(
                 "escalation": dataclasses.asdict(escalation) if escalation is not None else None,
                 "lease": dataclasses.asdict(lease) if lease is not None else None,
             })
+            if value.completed_work:
+                encoded["completed_work"] = sorted(value.completed_work)
         return encoded
 
     def decode_output(value: dict) -> AgentResult:
@@ -2864,6 +2875,7 @@ async def _run_flexible(
         interim_followups = saved_plan.get("interim_followups", {})
         owner_obligations = saved_plan.get("owner_obligations", {})
         owner_delivery = saved_plan.get("owner_delivery", {})
+        owner_completed_work = _restore_completed_work(saved_plan.get("owner_completed_work", []))
         if (not isinstance(owner_obligations, dict) or not isinstance(owner_delivery, dict)
                 or any(not isinstance(key, str) or key not in {str(index) for index in range(len(queue))}
                        or not isinstance(rows, list) or len(rows) > flexible.MAX_SUBTASKS * 4
@@ -2974,6 +2986,7 @@ async def _run_flexible(
             owner_mode=owner_mode, owner_reason=plan.owner_reason,
             owner_request=request if owner_mode else None,
             owner_obligations=owner_obligations, owner_delivery=owner_delivery,
+            owner_completed_work=sorted(owner_completed_work),
         )
 
     await save_progress()
@@ -3107,7 +3120,7 @@ async def _run_flexible(
             )
             obligation_sections["owner_continuation"] = (
                 "\nContinue your original job and finish the retained obligations."
-                f" Outstanding-scope reports: {sum(item['repeats'] + 1 for item in obligations if not item['resolved'])}."
+                f" Repeated reports without new recorded work: {sum(item['repeats'] for item in obligations if not item['resolved'])}."
                 " Reuse verified evidence. If reasoning prevents completion, request specialist help or escalation."
             )
         worker_sections.update(obligation_sections)
@@ -3467,8 +3480,20 @@ async def _run_flexible(
                 row = flexible.task_record(extra)
                 if row not in pending_followups:
                     pending_followups.append(row)
-            if owner_mode and reported_followups and not cached_output.get("owner_followups_processed"):
-                obligations = owner_obligations.setdefault(str(done), [])
+            if owner_mode and not cached_output.get("owner_followups_processed"):
+                obligations = owner_obligations.get(str(done), [])
+                if reported_followups:
+                    owner_obligations[str(done)] = obligations
+                new_work: list[str] = []
+                if not sub_result.error and not worker_awaiting and not sub_result.detached_tasks:
+                    work = _restore_completed_work(cached_output.get("completed_work", []))
+                    remaining = MAX_COMPLETED_WORK - len(owner_completed_work)
+                    new_work = sorted(work - owner_completed_work)[:remaining]
+                    owner_completed_work.update(new_work)
+                    if new_work:
+                        for obligation in obligations:
+                            if not obligation["resolved"]:
+                                obligation["repeats"] = 0
                 delivery_key = f"{done}:{task.tier}"
                 delivered = owner_delivery.get(delivery_key, 0)
                 reported_ids: set[str] = set()
@@ -3489,7 +3514,7 @@ async def _run_flexible(
                                 "All reported obligations remain in the saved checkpoint.",
                             )
                         obligations.append(_new_owner_obligation(extra.instruction, obligations))
-                    elif obligations.index(existing) < delivered:
+                    elif not new_work and obligations.index(existing) < delivered:
                         existing["repeats"] = min(_OWNER_REPEAT_LIMIT, existing["repeats"] + 1)
                 cached_output["owner_followups_processed"] = True
 

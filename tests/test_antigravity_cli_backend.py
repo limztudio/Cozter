@@ -110,6 +110,27 @@ class AntigravityCliBackendTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.backend.extract_agent_text(terminal), "Corrected final reply")
         self.assertEqual(left.usage["cache_read_tokens"], 80)
 
+    async def test_only_confirmed_inspections_add_stable_read_only_evidence(self):
+        result = AgentResult()
+        info = {"name": "view_file", "parameters": {"AbsolutePath": "a.py"}, "output": "contents"}
+
+        def parse(tool_info, *, state="DONE", step_index=1):
+            self.backend.parse_event({"event": "step_update", "step_update": {
+                "step_type": "tool", "state": state, "step_index": step_index, "tool_info": tool_info,
+            }}, result)
+
+        parse(info, state="ACTIVE")
+        parse({**info, "error": {"message": "could not open"}})
+        parse({**info, "parameters": {}})
+        parse({**info, "name": "run_command", "parameters": {"CommandLine": "git diff"}})
+        self.assertFalse(result.completed_work)
+
+        parse(info)
+        parse({**info, "output": "different output"}, step_index=2)
+        self.assertEqual(len(result.completed_work), 1)
+        parse({**info, "parameters": {"AbsolutePath": "b.py"}}, step_index=3)
+        self.assertEqual(len(result.completed_work), 2)
+
     async def test_terminal_errors_keep_partial_text_and_never_replace_pinned_uuid(self):
         native_id = "6ca6c4ef-cc6e-4c0b-a11a-5f93bb7708f3"
         await self.record.save(native_session_id=native_id, native_resume_attempted=True)
