@@ -1829,7 +1829,8 @@ Antigravity CLI uses the official `agy` executable, verified against `1.5.4`.
 Run `agy` once to finish native Google sign-in, then choose `/agent` →
 `antigravity_cli`. The model picker reads the signed-in account's `agy models`
 catalog and refreshes it after 60 seconds. It includes Carbon and Argon Low, Medium,
-and High when the account offers those variants. Cozter sends one framed
+and High when the account offers those variants. The fallback catalog also includes
+the Hydrogen and orchestrator IDs observed in the 1.5.9 account catalog. Cozter sends one framed
 JSON prompt through file-backed stdin, captures the CLI-assigned conversation
 UUID, and resumes only that UUID with `--conversation`. The same session can
 be opened in native `agy --conversation <UUID>` from its workspace. Direct
@@ -2079,7 +2080,7 @@ retain their native behavior.
 | `claude_code` | Model-aware: current Fable / Haiku 5.5 / Sonnet 5.5 / Sonnet 5 / Opus 4.7+ use 5 levels; Opus 4.6 and Sonnet 4.6 use 4; Opus 4.5, Haiku and older Sonnet pins use their defaults | `--effort max` for supported current models |
 | `copilot` | 7 levels (`none` through `max`) for an explicit model; `auto` delegates to Copilot | `--reasoning-effort max` for an explicit model; omitted for `auto` |
 | `grok` | Model-aware: grok-4.7 / grok-4.7-build-fast / grok-4.6 use 4 levels; grok-4.5 and unknown models use 3 | `--effort xhigh` on 4.7/4.6; `--effort high` otherwise |
-| `antigravity_cli` | Model-aware native variant levels, discovered from the account's model catalog | Highest published level only at `100`; current Argon/Flash/Claude variants use `high`, and `99` uses `medium` |
+| `antigravity_cli` | Model-aware native variant levels, discovered from the account's model catalog | Highest published level only at `100`; Argon/Flash/Claude variants use `high` and `99` uses `medium`, while Hydrogen also offers `xhigh` |
 
 GLM-5.2 uses its three effective levels, as documented in [Z.ai's thinking guide](https://docs.z.ai/guides/capabilities/thinking).
 The provider treats `xhigh` as `max`, so Cozter maps 1–99 to `none` or `high`
