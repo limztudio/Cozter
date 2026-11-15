@@ -1201,13 +1201,15 @@ making that decision, so a large accepted text upload is not decoded in full
 just to determine that it should be referenced by path.
 
 Photo uploads carry the saved path plus verified dimensions, format, and
-size, and every direct backend can see the pixels natively: `llama`,
+size. Cozter supplies image content to supported backends as follows: `llama`,
 `meta`, and `zai` receive them as OpenAI-style `image_url` parts,
 `codex` via repeatable `--image` flags, `copilot` via repeatable
 `--attachment` flags, `grok` via a private `--prompt-file` containing
 JSON text/image blocks (plain text when no image is referenced), and
 `claude_code` via a prompt hint telling the model to open the saved path
-with its own Read tool. The shared helper keeps only in-workspace images
+with its own Read tool. `antigravity_cli` receives the saved path in its text
+prompt; Cozter does not embed image data in its launch payload. The shared
+helper keeps only in-workspace images
 referenced by `[… attachment saved to: …]` markers (up to 4 per turn,
 4 MiB each) and never raises, so an ordinary text turn is unchanged. Its
 marker pattern is compiled once and plain text turns short-circuit on a
