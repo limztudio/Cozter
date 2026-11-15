@@ -146,6 +146,17 @@ class FlexibleEffortRoutingTests(unittest.IsolatedAsyncioTestCase):
                     on_event=None, inject_queue=None, injected=[],
                 )
 
+    @staticmethod
+    def cancelling_drive(calls):
+        async def drive(_backend, _ws, prompt, *_args, **_kwargs):
+            index = int(prompt.split("[Sub-task ")[1].split("/")[0])
+            calls[index] += 1
+            if index == 2 and calls[index] == 1:
+                raise asyncio.CancelledError
+            return AgentResult(text="Completed worker evidence"), False
+
+        return drive
+
     async def test_routes_actual_workers_using_snapshot_with_explicit_zero(self) -> None:
         workspace.set_reasoning_effort(self.ws, 5)
         workspace.set_flexible_reasoning_effort(self.ws, "low", 0)
@@ -164,13 +175,7 @@ class FlexibleEffortRoutingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_changed_tier_policy_invalidates_completed_worker_checkpoint(self) -> None:
         calls = Counter()
-
-        async def drive(_backend, _ws, prompt, *_args, **_kwargs):
-            index = int(prompt.split("[Sub-task ")[1].split("/")[0])
-            calls[index] += 1
-            if index == 2 and calls[index] == 1:
-                raise asyncio.CancelledError
-            return AgentResult(text="Completed worker evidence"), False
+        drive = self.cancelling_drive(calls)
 
         with self.assertRaises(asyncio.CancelledError):
             await self.invoke(drive)
@@ -181,13 +186,7 @@ class FlexibleEffortRoutingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_equal_explicit_policy_keeps_inherited_plan_and_completed_workers(self) -> None:
         calls = Counter()
-
-        async def drive(_backend, _ws, prompt, *_args, **_kwargs):
-            index = int(prompt.split("[Sub-task ")[1].split("/")[0])
-            calls[index] += 1
-            if index == 2 and calls[index] == 1:
-                raise asyncio.CancelledError
-            return AgentResult(text="Completed worker evidence"), False
+        drive = self.cancelling_drive(calls)
 
         with self.assertRaises(asyncio.CancelledError):
             await self.invoke(drive)
