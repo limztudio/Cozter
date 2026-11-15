@@ -570,8 +570,10 @@ operator override keyed first by backend and then by model ID; an optional
 }
 ```
 
-Only positive integers are accepted. This setting affects automatic
-compaction, not the provider request itself. Cozter uses built-in/live model
+Only positive integers are accepted. Cozter uses this capacity for automatic
+compaction and to budget input for OpenAI-compatible HTTP backends. The HTTP
+budget can change the projected messages sent to the provider; it does not
+change the provider model's actual capacity. Cozter uses built-in/live model
 metadata for known public models; use this override when a private model's
 capacity is known. If any model that can receive the saved conversation has
 no capacity, Cozter safely uses the workspace's `/compact` message interval
