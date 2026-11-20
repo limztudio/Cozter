@@ -252,6 +252,67 @@ class FlexibleOwnerHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.record.get("queue")[0]["tier"], "low")
         self.assertEqual(self.internal_labels, ["Flexible planner"])
 
+    async def test_obligation_pages_use_http_deltas_then_bootstrap_only_remaining_scope(self):
+        self.plan = owner_fixture.owner_plan(specialists=[])
+        instructions = [
+            f"HTTP-PAGE-SCOPE-{number:03d} Verify the source and generated registry contract "
+            + "while retaining every original constraint and the completed build evidence. " * 10
+            + f"END-HTTP-SCOPE-{number:03d}"
+            for number in range(20)
+        ]
+        payloads = []
+        completed = set()
+        pages = []
+        identities = []
+        original_driver = agent._drive_backend
+
+        async def stream(_endpoint, payload, *_args, **_kwargs):
+            self.assertEqual(payload["model"], "local-low")
+            payloads.append(copy.deepcopy(payload))
+            self.parent_record = oa.current_run()
+            identities.append((self.parent_record.path, self.parent_record.get("http_identity")))
+            if len(payloads) == 1:
+                return "\n".join(f"[followup:low] {instruction}" for instruction in instructions), "", []
+            saved = await execution_state.current_execution().record({"record": "flexible_plan", "worker": "main"})
+            rows = saved.get("owner_obligations")["0"]
+            self.assertEqual({row["instruction"] for row in rows if row["resolved"]}, completed)
+            users = [row["content"] for row in payload["messages"] if row["role"] == "user"]
+            current = users[-1]
+            selected = [instruction for instruction in instructions if instruction in current]
+            self.assertTrue(selected)
+            self.assertTrue(completed.isdisjoint(selected))
+            if pages:
+                self.assertEqual(len(users), 1)
+                self.assertIn("Original request", current)
+                self.assertIn("PAGE-1-BUILD-EVIDENCE", current)
+            else:
+                self.assertEqual(len(users), 2)
+                self.assertNotIn("Original request", current)
+            pages.append(selected)
+            completed.update(selected)
+            return f"PAGE-{len(pages)}-BUILD-EVIDENCE verified using the retained original scope.", "", []
+
+        async def drive(*args, **kwargs):
+            value = await original_driver(*args, **kwargs)
+            if len(payloads) == 2:
+                await self.parent_record.save(http_messages=[])
+            return value
+
+        with (mock.patch.object(oa, "_stream_completion", side_effect=stream),
+              mock.patch.object(agent, "_drive_backend", side_effect=drive)):
+            result, restarting = await self.invoke()
+
+        self.assertFalse(restarting)
+        self.assertFalse(result.error)
+        self.assertEqual(len(payloads), 3)
+        self.assertEqual(len(pages), 2)
+        self.assertEqual(completed, set(instructions))
+        self.assertEqual(len(set(identities)), 1)
+        self.assertEqual(self.record.get("owner_delivery")["0:low"], len(instructions))
+        self.assertTrue(all(row["resolved"] for row in self.record.get("owner_obligations")["0"]))
+        self.assertEqual(self.record.get("cursor"), 1)
+        self.assertEqual(self.internal_labels, ["Flexible planner"])
+
     async def test_followup_and_lease_report_retains_both_obligation_and_new_answer_in_owner_delta(self):
         self.owner_followup = True
 

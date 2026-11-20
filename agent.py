@@ -72,6 +72,8 @@ _CONTINUATION_CHECKPOINT_ITEMS = flexible.MAX_SUBTASKS * 4
 _DEFAULT_PENDING_SCOPE = "Verify completion of the full original request and finish any remaining work."
 _OWNER_REPEAT_LIMIT = 3
 _OWNER_REPEAT_ERROR = "Flexible owner repeatedly returned unresolved obligations."
+_OWNER_OBLIGATION_CHARS = 12_000
+_OWNER_CAPACITY_ERROR = "Flexible owner obligation capacity reached; unfinished scope is retained."
 
 
 def _checkpoint_scope(instruction: str, request: str) -> str:
@@ -1737,6 +1739,9 @@ def _native_turn_prompt(
             # Flexible appends role-specific sections after building shared context.
             prepared.sections.update({name: text for name, text in result.sections.items()
                                       if name not in {"colony", "memory", "summary"}})
+            prepared.partial_sections.update(
+                name for name in result.partial_sections if name not in {"colony", "memory", "summary"}
+            )
             prepared.request_identity = result.request_identity
             prepared.turn_instructions = result.turn_instructions
             return prepared
@@ -2509,6 +2514,29 @@ def _new_owner_obligation(instruction: str, rows: list[dict[str, Any]]) -> dict[
             "instruction": instruction, "repeats": 0, "resolved": False}
 
 
+def _owner_obligation_page(rows: list[dict[str, Any]]) -> dict[str, str]:
+    sections: dict[str, str] = {}
+    size = 0
+    for number, row in enumerate(rows, 1):
+        if row["resolved"]:
+            continue
+        text = (
+            f"\nDiscovered obligation {number} for this same owner: {row['instruction']}\n"
+            "Keep it within the original request and follow the current progress state."
+        )
+        if sections and size + len(text) > _OWNER_OBLIGATION_CHARS:
+            break
+        sections["owner_obligation:" + row["id"]] = text
+        size += len(text)
+    return sections
+
+
+def _owner_obligation_numbers(rows: list[dict[str, Any]], *, resolved: bool) -> str:
+    numbers = [str(index) for index, row in enumerate(rows, 1) if row["resolved"] == resolved]
+    text = ", ".join(numbers)
+    return text if len(text) <= 1000 else f"{len(numbers)} obligations; see the saved registry"
+
+
 def _owner_repeat_details(obligations: list[dict[str, Any]], report: str) -> str:
     open_items = sorted(
         (item for item in obligations if not item["resolved"]),
@@ -2563,8 +2591,6 @@ async def _continue_flexible_owner(instruction: str, draft: str) -> bool:
     if budget is not None and instruction not in budget.pending:
         budget.pending.append(instruction)
     if not any(row["scope"] == identity and not row["resolved"] for row in rows):
-        if len(rows) >= flexible.MAX_SUBTASKS * 4:
-            raise _TurnBudgetExhaustedError("the owner obligation context is full; remaining scope is checkpointed")
         rows.append(_new_owner_obligation(instruction, rows))
     output = saved.get("output", {})
     errors = saved.get("worker_errors", [])
@@ -2878,7 +2904,7 @@ async def _run_flexible(
         owner_completed_work = _restore_completed_work(saved_plan.get("owner_completed_work", []))
         if (not isinstance(owner_obligations, dict) or not isinstance(owner_delivery, dict)
                 or any(not isinstance(key, str) or key not in {str(index) for index in range(len(queue))}
-                       or not isinstance(rows, list) or len(rows) > flexible.MAX_SUBTASKS * 4
+                       or not isinstance(rows, list)
                        for key, rows in owner_obligations.items())):
             raise ValueError("Saved Flexible owner obligations are invalid")
         for rows in owner_obligations.values():
@@ -2888,7 +2914,7 @@ async def _run_flexible(
                         or not row["instruction"].strip()
                         or row.get("scope") != json_digest(flexible.instruction_identity(row["instruction"]))
                         or not isinstance(row.get("generation"), int) or isinstance(row["generation"], bool)
-                        or not 0 <= row["generation"] < flexible.MAX_SUBTASKS * 4
+                        or row["generation"] < 0
                         or row.get("id") != json_digest([row["scope"], row["generation"]])
                         or row["id"] in seen_owner_scopes
                         or not isinstance(row.get("resolved"), bool)
@@ -2897,7 +2923,8 @@ async def _run_flexible(
                     raise ValueError("Saved Flexible owner obligation is invalid")
                 seen_owner_scopes.add(row["id"])
         if any(not isinstance(key, str) or not isinstance(value, int) or isinstance(value, bool)
-               or not 0 <= value <= flexible.MAX_SUBTASKS * 4 for key, value in owner_delivery.items()):
+               or not 0 <= value <= len(owner_obligations.get(key.partition(":")[0], []))
+               for key, value in owner_delivery.items()):
             raise ValueError("Saved Flexible owner delivery is invalid")
         if (not isinstance(interim_followups, dict) or any(
             not isinstance(key, str) or flexible.restore_tasks(rows, limit=None) is None
@@ -3104,25 +3131,34 @@ async def _run_flexible(
             )
         worker_sections.update(lease_sections)
         obligations = owner_obligations.get(str(index), [])
-        obligation_sections = {
-            "owner_obligation:" + item["id"]: (
-                f"\nDiscovered obligation {number} for this same owner: {item['instruction']}\n"
-                "Keep it within the original request and follow the current progress state."
-            ) for number, item in enumerate(obligations, 1)
-        }
+        obligation_sections = _owner_obligation_page(obligations)
+        supplied_ids = {key.removeprefix("owner_obligation:") for key in obligation_sections}
         if obligations:
-            resolved = ", ".join(str(number) for number, item in enumerate(obligations, 1) if item["resolved"])
-            pending = ", ".join(str(number) for number, item in enumerate(obligations, 1) if not item["resolved"])
+            resolved = _owner_obligation_numbers(obligations, resolved=True)
+            pending = _owner_obligation_numbers(obligations, resolved=False)
             obligation_sections["owner_progress"] = (
                 f"\nPreviously reported completed obligations: {resolved or 'none'}."
                 f" Remaining obligations: {pending or 'none'}."
                 " Reuse completed work and valid verification; recheck only invalidated evidence or a new finding."
             )
+            page_numbers = ", ".join(
+                str(number) for number, item in enumerate(obligations, 1) if item["id"] in supplied_ids
+            )
+            obligation_sections["owner_progress"] += f"\nCurrent page obligations: {page_numbers or 'none'}."
             obligation_sections["owner_continuation"] = (
                 "\nContinue your original job and finish the retained obligations."
                 f" Repeated reports without new recorded work: {sum(item['repeats'] for item in obligations if not item['resolved'])}."
                 " Reuse verified evidence. If reasoning prevents completion, request specialist help or escalation."
             )
+            outstanding = sum(not item["resolved"] for item in obligations)
+            if len(supplied_ids) < outstanding:
+                obligation_sections["owner_progress"] += (
+                    f"\nThis page supplies {len(supplied_ids)} of {outstanding} unfinished obligations."
+                    " Finish this page within the full original request. Further saved obligations"
+                    " will be supplied to this same owner before completion is verified."
+                )
+                if saved_plan is not None:
+                    obligation_sections["owner_progress"] += f"\nFull obligation registry: {saved_plan.path}"
         worker_sections.update(obligation_sections)
         worker_context = None
         if backend.name in _NATIVE_BACKENDS:
@@ -3139,6 +3175,9 @@ async def _run_flexible(
                 key: text for key, text in worker_sections.items()
                 if key != "request" and not (owner_mode and key == "previous_draft")
             })
+            worker_context.partial_sections.update(
+                "owner_obligation:" + item["id"] for item in obligations
+            )
         delivery_key = f"{index}:{task.tier}"
         http_resume = backend.name not in _NATIVE_BACKENDS and (
             delivery_key in lease_delivery and bool(completed_leases)
@@ -3205,8 +3244,14 @@ async def _run_flexible(
             budget.capture(sub_result, workspace_path)
         if not restarting:
             lease_delivery[delivery_key] = lease_rounds.get(str(index), 0)
-            owner_delivery[delivery_key] = len(obligations)
+            supplied_through = max(
+                (position for position, item in enumerate(obligations, 1) if item["id"] in supplied_ids),
+                default=0,
+            )
+            owner_delivery[delivery_key] = max(owner_delivery.get(delivery_key, 0), supplied_through)
             worker_outputs[str(index)] = encode_output(sub_result, text=True)
+            if owner_mode:
+                worker_outputs[str(index)]["owner_obligation_ids"] = sorted(supplied_ids)
             try:
                 retain_report(index, sub_result)
                 retained_worker_reports.add(str(index))
@@ -3438,6 +3483,12 @@ async def _run_flexible(
             if restarting:
                 return await restart(result)
             cached_output = worker_outputs.get(str(done), {})
+            recovering_capacity = owner_mode and cached_output.get("terminal_error") == _OWNER_CAPACITY_ERROR
+            if recovering_capacity:
+                cached_output.pop("terminal_error", None)
+                cached_output.pop("terminal_text", None)
+                if result.error == _OWNER_CAPACITY_ERROR:
+                    result.error = None
             if cached_output.get("terminal_error"):
                 result.error = cached_output["terminal_error"]
                 result.completion_verified = False
@@ -3496,6 +3547,13 @@ async def _run_flexible(
                                 obligation["repeats"] = 0
                 delivery_key = f"{done}:{task.tier}"
                 delivered = owner_delivery.get(delivery_key, 0)
+                supplied = cached_output.get(
+                    "owner_obligation_ids", [item["id"] for item in obligations[:delivered]],
+                )
+                if (not isinstance(supplied, list) or any(not isinstance(item, str) for item in supplied)
+                        or not set(supplied).issubset(item["id"] for item in obligations)):
+                    raise ValueError("Saved Flexible obligation page is invalid")
+                supplied_ids = set(supplied)
                 reported_ids: set[str] = set()
                 for extra in reported_followups:
                     identity = json_digest(flexible.instruction_identity(extra.instruction))
@@ -3507,14 +3565,8 @@ async def _run_flexible(
                     existing = next((item for item in obligations
                                      if item["scope"] == identity and not item["resolved"]), None)
                     if existing is None:
-                        if len(obligations) >= flexible.MAX_SUBTASKS * 4:
-                            return await hold_current(
-                                "Flexible owner obligation capacity reached; unfinished scope is retained.",
-                                "The owner discovered more scope than can fit its bounded continuation context. "
-                                "All reported obligations remain in the saved checkpoint.",
-                            )
                         obligations.append(_new_owner_obligation(extra.instruction, obligations))
-                    elif not new_work and obligations.index(existing) < delivered:
+                    elif not recovering_capacity and not new_work and existing["id"] in supplied_ids:
                         existing["repeats"] = min(_OWNER_REPEAT_LIMIT, existing["repeats"] + 1)
                 cached_output["owner_followups_processed"] = True
 
@@ -3667,11 +3719,27 @@ async def _run_flexible(
 
             if owner_mode:
                 if not sub_result.error and not worker_awaiting:
-                    for item in owner_obligations.get(str(done), []):
+                    obligations = owner_obligations.get(str(done), [])
+                    supplied = set(cached_output.get(
+                        "owner_obligation_ids", [item["id"] for item in obligations],
+                    ))
+                    for item in obligations:
+                        if item["id"] not in supplied:
+                            continue
                         item["resolved"] = True
                         if budget is not None:
                             while item["instruction"] in budget.pending:
                                 budget.pending.remove(item["instruction"])
+                    if any(not item["resolved"] for item in obligations):
+                        reports.pop()
+                        previous_draft = flexible.bounded_draft_excerpt(report)
+                        worker_outputs.pop(str(done), None)
+                        restored_outputs.discard(str(done))
+                        retained_worker_reports.discard(str(done))
+                        interim_followups.pop(str(done), None)
+                        await save_progress()
+                        await status("flexible: the same owner is continuing the next saved obligation page")
+                        break
                 await advance_completed_worker()
                 continue
 

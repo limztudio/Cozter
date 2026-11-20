@@ -2,10 +2,11 @@
 
 import unittest
 
-from Cozter import agent, execution_state
+from Cozter import agent, execution_state, flexible
 from Cozter.backends_agent.base import AgentResult
 from Cozter.tests import test_flexible_low_default as native_fixture
 from Cozter.tests.test_flexible_owner_runtime import owner_plan
+from Cozter.utils import json_digest
 
 
 class FlexibleOwnerErrorReopenTests(unittest.IsolatedAsyncioTestCase):
@@ -86,4 +87,123 @@ class FlexibleOwnerErrorReopenTests(unittest.IsolatedAsyncioTestCase):
             self.assertLessEqual(len(saved.get("owner_error_audit")[-1]), 6000)
             self.assertIn(self.old_error, saved.get("owner_error_audit")[-1])
             self.assertEqual(saved.get("phase_previous_draft"), "Prior verified artifact proof")
+
+    async def test_judge_reopens_generation_48_in_same_native_owner_with_completed_history(self):
+        instruction = "Verify the dependent export after the newly discovered generated binding change"
+        scope = json_digest(flexible.instruction_identity(instruction))
+        history = [{
+            "id": json_digest([scope, generation]), "scope": scope, "generation": generation,
+            "instruction": instruction, "repeats": 0, "resolved": True,
+        } for generation in range(48)]
+
+        async def drive(_backend, _ws, prompt, model, approval, *, effort,
+                        on_native_activity=None, **_kwargs):
+            await self.accept_native(prompt, model, approval, effort, on_native_activity)
+            if len(self.calls) == 1:
+                return AgentResult(text="Verified original cache changes; build receipt retained.",
+                                   usage={"input_tokens": 3}), False
+            self.assertIn(instruction, prompt)
+            self.assertIn("Continue the current job from this native conversation", prompt)
+            return AgentResult(text="Verified the new export generation using the retained build receipt.",
+                               usage={"input_tokens": 2}), False
+
+        initial, _ = await self.invoke(drive)
+        async with execution_state.execution_scope(self.ws, "low-default", self.request) as execution:
+            execution_state.bind_conversation(self.sid)
+            saved = await execution_state.record("flexible_plan")
+            original_queue = saved.get("queue")
+            original_request = saved.get("owner_request")
+            evidence = await execution.record({"completed_build_receipt": "preserve"})
+            await evidence.save(exit_code=0, artifact="retained-build.log")
+            original_evidence = evidence.path.read_bytes()
+            await saved.save(owner_obligations={"0": history}, owner_delivery={"0:low": 48})
+            self.assertTrue(await agent._continue_flexible_owner(instruction, initial.text))
+            rows = saved.get("owner_obligations")["0"]
+            self.assertEqual(rows[:48], history)
+            self.assertEqual((rows[-1]["generation"], rows[-1]["resolved"], rows[-1]["repeats"]),
+                             (48, False, 0))
+            self.assertEqual(saved.get("owner_request"), original_request)
+            self.assertEqual(saved.get("queue"), original_queue)
+            self.assertEqual(evidence.path.read_bytes(), original_evidence)
+
+        result, restarting = await self.invoke(drive)
+
+        self.assertFalse(restarting)
+        self.assertFalse(result.error)
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(self.calls[0]["key"], self.calls[1]["key"])
+        self.assertEqual(self.calls[0]["native_id"], self.calls[1]["native_id"])
+        self.assertEqual(self.record.get("owner_obligations")["0"][:48], history)
+        self.assertTrue(self.record.get("owner_obligations")["0"][48]["resolved"])
+        self.assertEqual(self.record.get("cursor"), 1)
+        self.assertEqual(self.record.get("usage_processed_audit"), {"input_tokens": 5})
+        self.assertEqual(self.internal_labels, ["Flexible planner"])
+
+    async def test_cached_capacity_result_imports_full_followups_before_resuming_native_owner(self):
+        instructions = [
+            "LARGE-FIRST-SCOPE " + "Retain the exact generated binding rule and its source references. " * 210
+            + "END-LARGE-FIRST-SCOPE",
+            *(f"CAPACITY-SCOPE-{number:03d} Verify the retained source target and generated binding contract."
+              for number in range(1, 49)),
+        ]
+        report = "Verified changes and build evidence remain valid.\n" + "\n".join(
+            f"[followup:low] {instruction}" for instruction in instructions
+        )
+        capacity_error = "Flexible owner obligation capacity reached; unfinished scope is retained."
+        page_count = 0
+
+        async def drive(_backend, _ws, prompt, model, approval, *, effort,
+                        on_native_activity=None, **_kwargs):
+            nonlocal page_count
+            await self.accept_native(prompt, model, approval, effort, on_native_activity)
+            if len(self.calls) == 1:
+                return AgentResult(text=report, usage={"input_tokens": 3},
+                                   continuation_reason="prerequisite"), False
+            saved = await execution_state.current_execution().record({"record": "flexible_plan", "worker": "main"})
+            rows = saved.get("owner_obligations")["0"]
+            self.assertEqual([row["instruction"] for row in rows], instructions)
+            if page_count == 0:
+                self.assertIn(instructions[0], prompt)
+                self.assertNotIn(instructions[1], prompt)
+            else:
+                self.assertIn(instructions[-1], prompt)
+            page_count += 1
+            return AgentResult(text="Verified the supplied page using the saved build evidence.",
+                               usage={"input_tokens": 2}), False
+
+        initial, _ = await self.invoke(drive)
+        self.assertEqual(initial.continuation_reason, "prerequisite")
+        async with execution_state.execution_scope(self.ws, "low-default", self.request):
+            saved = await execution_state.record("flexible_plan")
+            rows = []
+            for instruction in instructions[:48]:
+                scope = json_digest(flexible.instruction_identity(instruction))
+                rows.append({"id": json_digest([scope, 0]), "scope": scope, "generation": 0,
+                             "instruction": instruction, "repeats": 0, "resolved": False})
+            previous_ids = [row["id"] for row in rows]
+            outputs = saved.get("worker_outputs")
+            outputs["0"].update(complete=True, terminal_error=capacity_error,
+                                 terminal_text="PARTIAL: The owner discovered more scope than can fit its bounded continuation context.",
+                                 usage_processed=True)
+            outputs["0"].pop("owner_obligation_ids", None)
+            self.assertLessEqual(len(outputs["0"]["text"]), 6000)
+            self.assertIn(instructions[-1], outputs["0"]["followups"])
+            await saved.save(owner_obligations={"0": rows}, owner_delivery={"0:low": 0},
+                             worker_outputs=outputs, output={"error": capacity_error, "events": []})
+
+        result, restarting = await self.invoke(drive)
+
+        self.assertFalse(restarting)
+        self.assertFalse(result.error)
+        self.assertEqual(page_count, 2)
+        self.assertEqual(len(self.calls), 3)
+        self.assertEqual(len({call["native_id"] for call in self.calls}), 1)
+        self.assertEqual(len({call["key"] for call in self.calls}), 1)
+        rows = self.record.get("owner_obligations")["0"]
+        self.assertEqual([row["id"] for row in rows[:48]], previous_ids)
+        self.assertEqual([row["instruction"] for row in rows], instructions)
+        self.assertTrue(all(row["resolved"] for row in rows))
+        self.assertEqual(self.record.get("cursor"), 1)
+        self.assertEqual(self.record.get("usage_processed_audit"), {"input_tokens": 7})
+        self.assertEqual(self.internal_labels, ["Flexible planner"])
 

@@ -6,7 +6,7 @@ import json
 import unittest
 from unittest import mock
 
-from Cozter import execution_state
+from Cozter import agent, execution_state
 from Cozter.backends_agent.base import AgentResult, record_completed_work
 from Cozter.tests import test_flexible_tier_leases as lease_fixture
 
@@ -239,6 +239,66 @@ class FlexibleOwnerRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([row["tier"] for row in self.record.get("queue")], ["low"])
         self.assertEqual(self.record.get("cursor"), 1)
         self.assertIn("newly discovered dependent cache export", str(self.record.get("owner_obligations")))
+        self.assertEqual(self.internal_labels, ["Flexible planner"])
+
+    async def test_large_followup_report_pages_all_scope_and_resumes_after_page_cancellation(self):
+        self.plan = owner_plan(specialists=[])
+        instructions = [
+            f"OWNER-SCOPE-{number:03d} Inspect source/{number:03d}/cache.cpp and verify the registry contract "
+            + "against the retained original requirements and the exact generated export references. " * 3
+            + f"END-SCOPE-{number:03d}"
+            for number in range(55)
+        ]
+        report = "Earlier verified build evidence. " * 250 + "\n" + "\n".join(
+            f"[followup:high] {instruction}" for instruction in instructions
+        )
+        completed = set()
+        pages = []
+        roles = []
+        interrupted = False
+
+        async def drive(backend, _ws, prompt, model, approval, *, effort, **_kwargs):
+            nonlocal interrupted
+            roles.append((backend.name, model, approval, effort,
+                          (await execution_state.record("paged-owner-role-probe")).key))
+            if len(roles) == 1:
+                return AgentResult(text=report, usage={"input_tokens": 3}), False
+            saved = await execution_state.current_execution().record({"record": "flexible_plan", "worker": "main"})
+            rows = saved.get("owner_obligations")["0"]
+            self.assertEqual([row["instruction"] for row in rows], instructions)
+            self.assertEqual({row["instruction"] for row in rows if row["resolved"]}, completed)
+            selected = [instruction for instruction in instructions if instruction in prompt]
+            self.assertTrue(selected)
+            self.assertTrue(completed.isdisjoint(selected))
+            self.assertLess(sum(len(instruction) for instruction in selected), agent._OWNER_OBLIGATION_CHARS)
+            if pages and not interrupted:
+                interrupted = True
+                raise asyncio.CancelledError
+            pages.append(selected)
+            completed.update(selected)
+            return AgentResult(text=f"Verified the supplied source page {len(pages)}.",
+                               usage={"input_tokens": 2}), False
+
+        with self.assertRaises(asyncio.CancelledError):
+            await self.invoke(drive)
+        self.assertEqual(len(pages), 1)
+        self.assertLess(len(completed), len(instructions))
+        self.assertEqual(self.record.get("cursor"), 0)
+        saved_ids = [row["id"] for row in self.record.get("owner_obligations")["0"]]
+        self.assertEqual(self.record.get("usage_processed_audit"), {"input_tokens": 5})
+
+        result, restarting = await self.invoke(drive)
+
+        self.assertFalse(restarting)
+        self.assertFalse(result.error)
+        self.assertEqual(completed, set(instructions))
+        self.assertGreater(len(pages), 1)
+        rows = self.record.get("owner_obligations")["0"]
+        self.assertEqual([row["id"] for row in rows], saved_ids)
+        self.assertTrue(all(row["resolved"] for row in rows))
+        self.assertEqual(self.record.get("cursor"), 1)
+        self.assertEqual(len(set(roles)), 1)
+        self.assertEqual(self.record.get("usage_processed_audit"), {"input_tokens": 3 + 2 * len(pages)})
         self.assertEqual(self.internal_labels, ["Flexible planner"])
 
     async def test_initial_consultations_share_the_three_request_helper_bound(self):

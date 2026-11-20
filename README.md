@@ -1620,6 +1620,13 @@ same completion owner, including after an escalation. An ordinary follow-up
 does not select another writer or restart the whole audit. Existing saved
 multi-worker plans resume their original queue and chosen tiers unchanged.
 
+Persistent owners keep every obligation in the saved plan and receive unfinished
+work in pages of up to 12,000 characters. An individual longer obligation is
+supplied intact. Completing a page advances the same owner to the next page,
+and completion checks cover the full original request. Stable obligation IDs
+and delivery receipts preserve progress across restarts. Earlier capacity holds
+resume by processing their saved follow-ups before any new worker call.
+
 In existing multi-worker plans, `[parallel-read]` means both read-only and independent of the other consecutive
 marked tasks. For example, inspecting existing transport logs and reviewing an
 unrelated parser can run together before one repair worker consumes both reports.
