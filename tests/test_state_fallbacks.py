@@ -1778,7 +1778,7 @@ class RuntimeInputValidationTests(unittest.TestCase):
             "https://example.com/?uddg=",
         )
         self.assertEqual(
-            web_search_mod._is_ad_or_internal("https://html.duckduckgo.com/html/?q=x"),
+            web_search_mod._should_filter_result_url("https://html.duckduckgo.com/html/?q=x"),
             True,
         )
 

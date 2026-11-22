@@ -154,7 +154,7 @@ def _parse_results(body: str, max_results: int) -> list[str]:
             scan_capped = True
             break
         raw_href = html.unescape(href)
-        if _is_ad_or_internal(raw_href):
+        if _should_filter_result_url(raw_href):
             continue
         title = html_to_text(contents)
         if not title:
@@ -175,8 +175,8 @@ def _parse_results(body: str, max_results: int) -> list[str]:
     return results
 
 
-def _is_ad_or_internal(raw_href: str) -> bool:
-    """Whether *raw_href* is a sponsored link or points at DuckDuckGo."""
+def _should_filter_result_url(raw_href: str) -> bool:
+    """Filter sponsored, internal, and invalid result URLs."""
     try:
         parsed = urllib.parse.urlsplit(raw_href)
         query = urllib.parse.parse_qs(parsed.query)
