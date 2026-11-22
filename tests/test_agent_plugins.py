@@ -124,7 +124,7 @@ class NotesToolTests(unittest.TestCase):
         self.assertTrue(self.invoke("append").startswith("Error:"))
         self.assertTrue(self.invoke("append", "   ").startswith("Error:"))
 
-    def test_append_requires_known_action(self) -> None:
+    def test_unknown_action_is_rejected(self) -> None:
         self.assertTrue(self.invoke("delete").startswith("Error:"))
 
     def test_read_reports_empty_then_entries(self) -> None:
