@@ -4422,23 +4422,7 @@ class BotPlatform(ABC):
         for uid, ws in workspace.iter_current_workspaces(self.platform_id):
             if not os.path.isdir(ws):
                 continue
-            if uid in self._manually_paused:
-                try:
-                    records = self._platform_schedules(ws, uid)
-                    for sched in records:
-                        schedule_id = sched.get("id")
-                        if not isinstance(schedule_id, str) or not schedule_id:
-                            continue
-                        slot = schedules.most_recent_slot(sched, now)
-                        if slot is None:
-                            continue
-                        occurrence = ScheduledOccurrence(ws, uid, schedule_id, slot.isoformat())
-                        receipt = watermarks.get(occurrence.key())
-                        if receipt is not None:
-                            await self._project_schedule_receipt(uid, ws, schedule_id, receipt)
-                except Exception:
-                    logger.exception("Could not inspect schedules for user=%s workspace=%s", uid, ws)
-                continue
+            paused = uid in self._manually_paused
             try:
                 records = self._platform_schedules(ws, uid)
                 for sched in records:
@@ -4452,6 +4436,8 @@ class BotPlatform(ABC):
                     receipt = watermarks.get(occurrence.key())
                     if receipt is not None:
                         await self._project_schedule_receipt(uid, ws, schedule_id, receipt)
+                    if paused:
+                        continue
                     baseline = max((value for value in (
                         schedules.parse_iso(sched.get("last_fired")),
                         schedules.parse_iso(receipt), schedules.parse_iso(sched.get("created")),
