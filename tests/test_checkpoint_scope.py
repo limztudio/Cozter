@@ -94,7 +94,7 @@ class CheckpointScopeTests(unittest.IsolatedAsyncioTestCase):
                         collaborative=False, summary_backend_name="meta", summary_model="summary",
                         on_event=None, inject_queue=None, injected=[],
                     )
-                checkpoint = budget.checkpoint("tool allowance", agent._InterruptedTurn(ws, request))
+                checkpoint = budget.checkpoint("tool allowance", agent._TurnTrace(ws, request))
             self.assertEqual(checkpoint["pending"], [agent._DEFAULT_PENDING_SCOPE])
             self.assertEqual(checkpoint["reports"][0]["instruction"], agent._DEFAULT_PENDING_SCOPE)
             self.assertIn("Source repair evidence retained", checkpoint["reports"][0]["report"])
@@ -110,7 +110,7 @@ class CheckpointScopeTests(unittest.IsolatedAsyncioTestCase):
         budget = agent.TurnBudget()
         budget.pending = [original, semantic_instruction]
         budget.reports = [(original, report), (semantic_instruction, report)]
-        turn = agent._InterruptedTurn("C:/example", original, injected=["Preserve both examples."])
+        turn = agent._TurnTrace("C:/example", original, injected=["Preserve both examples."])
         checkpoint = budget.checkpoint("execution boundary", turn)
         self.assertEqual(checkpoint["request"], original)
         self.assertEqual(checkpoint["pending"], [agent._DEFAULT_PENDING_SCOPE, semantic_instruction])

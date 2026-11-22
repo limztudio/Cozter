@@ -152,7 +152,7 @@ class TurnBudget:
             _accumulate_usage(usage, result.usage)
             self.output.usage = usage or None
 
-    def checkpoint(self, reason: str, turn: "_InterruptedTurn") -> ContinuationCheckpoint:
+    def checkpoint(self, reason: str, turn: "_TurnTrace") -> ContinuationCheckpoint:
         """Keep worker evidence and actionable scope outside the reply's small preview."""
         reports = [(_checkpoint_scope(instruction, turn.prompt), report)
                    for instruction, report in self.reports[-_CONTINUATION_CHECKPOINT_ITEMS:]]
@@ -214,7 +214,7 @@ class TurnBudget:
         }
 
     def finish(
-        self, reason: str, turn: "_InterruptedTurn",
+        self, reason: str, turn: "_TurnTrace",
         *, continuation_reason: ContinuationReason = "worker_budget",
     ) -> AgentResult:
         result = self.output
@@ -2369,7 +2369,7 @@ def _split_attach_markers(text: str) -> tuple[str, list[str]]:
 
 def _retain_blocked_verdict(
     result: AgentResult, verdict: flexible.JudgeVerdict,
-    *, turn: "_InterruptedTurn | None" = None,
+    *, turn: "_TurnTrace | None" = None,
 ) -> None:
     """Retain unfinished work for automatic prerequisite recovery and retry."""
     result.completion_verified = False
@@ -4306,7 +4306,7 @@ INTERRUPTED_TURN_EVENT_KEEP = 100
 
 
 @dataclass
-class _InterruptedTurn:
+class _TurnTrace:
     """Durable-trace accumulator for one agent run.
 
     :func:`_run_turn` fills this in as the turn progresses. If the turn is
@@ -4325,7 +4325,7 @@ class _InterruptedTurn:
     normal_log_task: asyncio.Task[bool] | None = None
 
 
-def _interrupted_turn_note(turn: _InterruptedTurn) -> str:
+def _interrupted_turn_note(turn: _TurnTrace) -> str:
     """Build the assistant-side session entry for a cancelled turn."""
     lines = [
         "[Interrupted turn — stopped before completion at "
@@ -4395,7 +4395,7 @@ async def _acknowledge_native_user_messages(
         await native_prompt.acknowledge_logged_turn(record, data, request_only=not known_response)
 
 
-def _log_interrupted_turn(turn: _InterruptedTurn) -> None:
+def _log_interrupted_turn(turn: _TurnTrace) -> None:
     """Persist a cancelled turn's prompt and partial output to its session.
 
     Runs as a detached background task: the cancelling turn must re-raise
@@ -4491,7 +4491,7 @@ async def _run_turn(
     prompt and any partial output to the session before propagating, so a
     later resume has real memory of the stopped attempt.
     """
-    turn = _InterruptedTurn(
+    turn = _TurnTrace(
         workspace_path=workspace_path, prompt=prompt, session_id=session_id,
     )
     with turn_budget() as budget:
@@ -4570,7 +4570,7 @@ async def _run_turn(
 
 
 async def _run_turn_impl(
-    turn: _InterruptedTurn,
+    turn: _TurnTrace,
     prompt: str,
     workspace_path: str,
     user_id: int,

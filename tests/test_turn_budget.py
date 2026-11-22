@@ -346,7 +346,7 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
     async def test_checkpoint_bounds_large_accepted_additions_with_omission_evidence(self):
         with agent.turn_budget() as budget:
             additions = ["start\n" + "x" * 100000 + "\nfinish"]
-            final = budget.finish("worker cap reached", agent._InterruptedTurn(
+            final = budget.finish("worker cap reached", agent._TurnTrace(
                 self.ws, "request", injected=additions,
             ))
         checkpoint = final.continuation_checkpoint
@@ -426,7 +426,7 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(budget.output.events, [])
             budget.reports = [(f"task {index}", "detail\n" * 4000) for index in range(24)]
             budget.pending = ["scope " + "long " * 1000 for _ in range(24)]
-            turn = agent._InterruptedTurn(self.ws, "request", events=[ChatEvent(kind="tool", content="x" * 10000)])
+            turn = agent._TurnTrace(self.ws, "request", events=[ChatEvent(kind="tool", content="x" * 10000)])
             final = budget.finish("worker cap reached", turn)
         self.assertLess(len(final.text), 14000)
         self.assertIn("middle omitted", final.text)
@@ -440,7 +440,7 @@ class TurnBudgetTests(unittest.IsolatedAsyncioTestCase):
             budget.reports = [(f"task {index}", "Opening\n" + str(index) * 3500 + "\nVerified")
                               for index in range(5)]
             budget.pending = ["Finish verification and push the completed work"]
-            final = budget.finish("worker cap reached", agent._InterruptedTurn(self.ws, "request"))
+            final = budget.finish("worker cap reached", agent._TurnTrace(self.ws, "request"))
         self.assertIn("middle omitted", final.text)
         self.assertEqual(final.continuation_checkpoint["reports"][2]["report"], budget.reports[2][1])
         self.assertEqual(final.continuation_checkpoint["pending"], budget.pending)
