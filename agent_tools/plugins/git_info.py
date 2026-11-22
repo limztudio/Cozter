@@ -34,7 +34,6 @@ from ._git_common import (
     git_once as _git_once,
 )
 
-# Real-work cap; shared limits/validation live in ._git_common.
 _ACTIONS = (
     "status",
     "log",

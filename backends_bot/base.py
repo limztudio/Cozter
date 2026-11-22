@@ -782,7 +782,6 @@ class BotPlatform(ABC):
         # Update pulled; waiting for active replies before restart.
         self._update_restart_pending = False
         self._queue_file_lock: asyncio.Lock = asyncio.Lock()
-        # Staged final text for retry without rerunning.
         self._reply_delivery_file_lock: asyncio.Lock = asyncio.Lock()
         self._reply_delivery_locks: dict[str, asyncio.Lock] = {}
         # Recovery poll classes run independently; outbound chunks for one
@@ -5110,7 +5109,6 @@ class BotPlatform(ABC):
                     return
                 pending_status = status_lines[-1]
             else:
-                # One Thinking message, edited in place.
                 pending_status = self._compose_thinking_display(
                     status_lines, latest_text,
                     total_status_lines=total_status_lines,

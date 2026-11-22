@@ -29,7 +29,6 @@ from ._git_common import (
     run_git as _run_git,
 )
 
-# Real-work cap; shared limits/validation live in ._git_common.
 _ACTIONS = ("fetch", "pull", "push", "remotes")
 
 
