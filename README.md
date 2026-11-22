@@ -2408,7 +2408,8 @@ recursive stack limits and a cache of every equivalent match state.
 
 ## Source inventory
 
-The tracked workspace is intentionally flat and small. A complete source
+The tracked workspace is intentionally flat and small: this checkout has 291
+tracked files, including 199 test files. A complete source
 audit should use `git ls-files` so hidden tracked files, especially
 `.config/config.example.json`, are included even though `.config/*` is
 ignored for local secrets and runtime queues.
@@ -2835,6 +2836,17 @@ The checked-in CI commands run discovery and fail on test failures, but do
 not separately enforce a numeric test-count threshold. Check the reported
 `Ran ... tests` count when using that baseline, and investigate a lower
 count instead of treating an incomplete discovery run as equivalent.
+To check collection without executing tests, run the following from the
+checkout with its parent on `PYTHONPATH`:
+
+```bash
+PYTHONPATH=.. python -c "import unittest; loader = unittest.TestLoader(); suite = loader.discover('tests'); print('Collected:', suite.countTestCases()); print('Discovery errors:', len(loader.errors)); [print(error) for error in loader.errors]"
+```
+
+Discovery currently collects 2,250 cases. A successful collection is not a
+test run: run the full suite below and check its result and skips as well.
+On Windows PowerShell, set `$env:PYTHONPATH` to the checkout's parent before
+running the same Python command.
 
 GitLab runners may check out this repository under a name other than `Cozter`.
 The canonical pipeline creates a temporary directory containing
