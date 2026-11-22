@@ -153,6 +153,8 @@ class ZaiModelDiscoveryCapabilityTests(unittest.TestCase):
         )
         self.assertIn("glm-5.3-flashx", standard)
         self.assertNotIn("glm-5.3-flashx", coding)
+        self.assertIn("glm-5.3-flashx-legal", standard)
+        self.assertNotIn("glm-5.3-flashx-legal", coding)
         self.assertIn("glm-5.3-flash[1m]", coding)
         self.assertIn("glm-5.3[1m]", coding)
 

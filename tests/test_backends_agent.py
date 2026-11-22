@@ -2035,7 +2035,7 @@ class ZaiBackendTests(unittest.TestCase):
             (
                 "glm-5.3[1m]",
                 "glm-5.3-flash[1m]",
-                *(model for model in zai_mod._FALLBACK_MODELS if model != "glm-5.3-flashx"),
+                *(model for model in zai_mod._FALLBACK_MODELS if model not in {"glm-5.3-flashx", "glm-5.3-flashx-legal"}),
             ),
         )
         self.assertIn("glm-5.3-flash", zai_mod._FALLBACK_MODELS)
@@ -2323,11 +2323,11 @@ class ZaiBackendTests(unittest.TestCase):
         backend = ZaiBackend()
         self.assertEqual(
             zai_mod._PRESERVED_THINKING_MODELS,
-            (set(zai_mod._CODING_PLAN_FALLBACK_MODELS) | {"glm-5.3-flashx"})
+            (set(zai_mod._CODING_PLAN_FALLBACK_MODELS) | {"glm-5.3-flashx", "glm-5.3-flashx-legal"})
             - {"glm-4-32b-0414-128k"},
         )
         for model in (
-            "glm-5.3", "glm-5.3-flash", "glm-5.3-flashx",
+            "glm-5.3", "glm-5.3-flash", "glm-5.3-flashx", "glm-5.3-flashx-legal",
             "glm-5.3-flash[1m]",
             "glm-5.2", "GLM-5.2[1M]",
             "glm-4.5-air",
@@ -2338,7 +2338,7 @@ class ZaiBackendTests(unittest.TestCase):
             with self.subTest(model=model):
                 self.assertFalse(backend._preserve_reasoning_content(model))
 
-        for model in ("glm-5.3", "glm-5.3-flash", "glm-5.3-flashx", "glm-5.2"):
+        for model in ("glm-5.3", "glm-5.3-flash", "glm-5.3-flashx", "glm-5.3-flashx-legal", "glm-5.2"):
             with self.subTest(model=model):
                 self.assertEqual(
                     backend._preserved_reasoning_request_fields(model, {}),
@@ -2360,6 +2360,7 @@ class ZaiBackendTests(unittest.TestCase):
             "glm-5.3",
             "glm-5.3-flash",
             "glm-5.3-flashx",
+            "glm-5.3-flashx-legal",
             "glm-5.2",
             "glm-5.1",
             "glm-5-turbo",

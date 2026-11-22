@@ -41,6 +41,7 @@ _FALLBACK_MODEL_SPECS = (
     _ZaiModelSpec("glm-5.3", 1_000_000, True, True),
     _ZaiModelSpec("glm-5.3-flash", 1_000_000, True, True),
     _ZaiModelSpec("glm-5.3-flashx", 1_000_000, True, True),
+    _ZaiModelSpec("glm-5.3-flashx-legal", 1_000_000, True, True),
     _ZaiModelSpec("glm-5.2", 1_000_000, True, True),
     _ZaiModelSpec("glm-5v-turbo", 200_000, True, False),
     _ZaiModelSpec("glm-5.1", 200_000, True, True),
@@ -74,7 +75,7 @@ _CODING_PLAN_FALLBACK_MODELS = tuple(
         *_FALLBACK_MODEL_SPECS,
     )
     # https://docs.z.ai/guides/vlm/glm-5.3-flash (2026-11-11).
-    if spec.name != "glm-5.3-flashx"
+    if spec.name not in {"glm-5.3-flashx", "glm-5.3-flashx-legal"}
 )
 _ALL_FALLBACK_MODEL_SPECS = (
     *_CODING_PLAN_FALLBACK_MODEL_SPECS,
@@ -104,7 +105,9 @@ _NON_CHAT_COMPLETION_MODEL_IDS = frozenset({
 })
 _NO_FUNCTION_TOOL_MODELS = frozenset({"glm-4.5v"})
 _COMPULSORY_THINKING_MODELS = frozenset({"glm-4.7", "glm-4.5v"})
-_GLM_5_3_REASONING_MODELS = frozenset({"glm-5.3", "glm-5.3-flash", "glm-5.3-flashx"})
+_GLM_5_3_REASONING_MODELS = frozenset({
+    "glm-5.3", "glm-5.3-flash", "glm-5.3-flashx", "glm-5.3-flashx-legal",
+})
 _GLM_5_3_EFFORT_LEVELS = ("low", "high", "max")
 
 
