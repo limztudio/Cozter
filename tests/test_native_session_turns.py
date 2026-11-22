@@ -181,12 +181,12 @@ class NativeSessionTurnsTests(unittest.IsolatedAsyncioTestCase):
         await self._turn("codex", "CODEX-ORIGINAL-REQUEST", sid=sid)
         original_id = self.attempts[-1]["native_id"]
         await self._turn("claude_code", "CLAUDE-INTERVENING-REQUEST", sid=sid)
-        intervening_answer = self.attempts[-1]["native_id"]
+        intervening_id = self.attempts[-1]["native_id"]
         await self._turn("codex", "CODEX-RETURN-REQUEST", sid=sid)
 
         returned = self.attempts[-1]
         self.assertEqual(returned["previous_id"], original_id)
-        self.assertNotEqual(original_id, intervening_answer)
+        self.assertNotEqual(original_id, intervening_id)
         self.assertIn("CLAUDE-INTERVENING-REQUEST", returned["prompt"])
         self.assertIn("ANSWER-MARKER-2", returned["prompt"])
         self.assertNotIn("CODEX-ORIGINAL-REQUEST", returned["prompt"])
