@@ -1772,7 +1772,7 @@ class RuntimeInputValidationTests(unittest.TestCase):
                 json.dump({"items": [], "compact_count": -5}, file_handle)
             self.assertEqual(colony.bump_compact_count(tmp), 1)
 
-    def test_ddg_unwrap_rejects_non_string_values(self) -> None:
+    def test_ddg_empty_redirect_is_retained_and_internal_url_is_filtered(self) -> None:
         self.assertEqual(
             web_search_mod._ddg_unwrap_url("https://example.com/?uddg="),
             "https://example.com/?uddg=",
