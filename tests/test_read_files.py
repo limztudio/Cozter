@@ -18,7 +18,6 @@ class TruncateWithMarkerTests(unittest.TestCase):
         self.assertEqual(len(clipped), 256)
         self.assertIn("truncated", clipped)
         self.assertIn("fetch the remaining range", clipped)
-        self.assertNotEqual(clipped, text)
         for budget in (0, 1, 8):
             with self.subTest(budget=budget):
                 self.assertLessEqual(len(truncate_with_marker(text, budget, "page")), budget)

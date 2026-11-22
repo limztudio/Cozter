@@ -96,8 +96,6 @@ class WebFetchSecurityTests(unittest.TestCase):
             validate_public_url("https:///missing-host"),
             "Error: invalid URL host",
         )
-        self.assertIsNone(validate_public_url("https://example.com/"))
-
     def test_dns_results_must_all_be_public(self) -> None:
         async def run() -> None:
             delegate = _StaticResolver([

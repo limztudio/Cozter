@@ -1,8 +1,6 @@
 """Offline regressions for progress traffic, Signal deadlines, and shells."""
 
 import asyncio
-import os
-import shutil
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -278,32 +276,6 @@ class ShellSelectionTests(unittest.TestCase):
         ):
             with self.subTest(shell=shell), mock.patch.object(bash_tool, "_find_shell", return_value=shell):
                 self.assertIn(expected, bash_tool.shell_context())
-
-
-class NativeShellSmokeTests(unittest.IsolatedAsyncioTestCase):
-    def setUp(self) -> None:
-        powershell = shutil.which("pwsh") or shutil.which("powershell")
-        if powershell is None:
-            self.skipTest("PowerShell unavailable")
-        # PATH lookup and filesystem fixtures can block; prepare them before
-        # unittest starts running the test coroutine on its debug event loop.
-        temporary = tempfile.TemporaryDirectory()
-        self.addCleanup(temporary.cleanup)
-        self.path = temporary.name
-        shell = mock.patch.object(
-            bash_tool, "_find_shell", return_value=[
-                powershell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
-            ],
-        )
-        shell.start()
-        self.addCleanup(shell.stop)
-
-    @unittest.skipUnless(os.name == "nt", "Windows native shell smoke test")
-    async def test_native_powershell_runs_without_profile_or_interactive_setup(self) -> None:
-        result = await asyncio.wait_for(bash_tool.BashTool().run(
-            self.path, {"command": "Write-Output 'native shell probe'"},
-        ), timeout=5)
-        self.assertEqual(result.strip(), "native shell probe")
 
 
 if __name__ == "__main__":

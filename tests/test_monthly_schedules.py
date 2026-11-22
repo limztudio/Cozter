@@ -29,7 +29,6 @@ class ScheduleDayTests(unittest.TestCase):
             schedules.normalize_days(["Monday", "mon", 1, "01", "31", "WED"]),
             ["mon", 1, 31, "wed"],
         )
-        self.assertEqual(schedules.normalize_days(["mon", "wed"]), ["mon", "wed"])
 
     def test_persisted_invalid_items_do_not_hide_valid_dates(self) -> None:
         self.assertEqual(

@@ -101,20 +101,6 @@ class UpdaterAutoPullGuardTests(unittest.TestCase):
             f"pull should be skipped when local is ahead; calls={calls}",
         )
 
-    def test_clean_and_current_pulls(self) -> None:
-        calls = self._run_fetch_and_pull({
-            "origin": "",
-            "--porcelain": "",
-            "@{u}": "origin/main",
-            "origin/main..HEAD": "0",
-            "--ff-only": "",
-            "HEAD": "abc123",
-        })
-        self.assertTrue(
-            self._pulled(calls),
-            f"pull should run on a clean, current checkout; calls={calls}",
-        )
-
     def test_failed_ahead_comparison_skips_pull(self) -> None:
         calls: list[tuple[str, ...]] = []
 

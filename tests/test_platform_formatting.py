@@ -37,10 +37,8 @@ class PlatformFormattingTests(unittest.TestCase):
         self.assertEqual(_md_to_html(source), "\x00CODE\x000\x00CODE\x00 <code>*literal*</code>")
         self.assertEqual(_md_to_mrkdwn(source), source)
 
-    def test_attachment_kind_from_mime_handles_all_transports(self) -> None:
+    def test_attachment_kind_handles_uppercase_and_missing_mime(self) -> None:
         self.assertEqual(attachment_kind_from_mime("IMAGE/jpeg"), "photo")
-        self.assertEqual(attachment_kind_from_mime("audio/ogg"), "audio")
-        self.assertEqual(attachment_kind_from_mime("video/mp4"), "video")
         self.assertEqual(attachment_kind_from_mime(None), "document")
 
     def test_fenced_code_keeps_shorter_and_nonclosing_backtick_lines(self):

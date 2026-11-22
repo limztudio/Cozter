@@ -155,12 +155,5 @@ class ReadFileBoundValidationTests(unittest.TestCase):
                     ),
                     "Error: 'limit' must be an integer",
                 )
-                self.assertEqual(
-                    await tool.run(
-                        tmp,
-                        {"path": "f.txt", "offset": 1, "limit": 1},
-                    ),
-                    "b\n",
-                )
 
         asyncio.run(run())

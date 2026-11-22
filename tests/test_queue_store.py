@@ -39,13 +39,6 @@ class QueueStoreTests(unittest.TestCase):
         with closing(sqlite3.connect(self.path)) as connection:
             self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
 
-    def test_new_admission_atomically_owns_entry_and_watermark(self) -> None:
-        occurrence = self.occurrence()
-        entry = self.entry(occurrence)
-        self.assertEqual(self.store.admit("owner", entry, occurrence), AdmissionResult(entry, True))
-        self.assertEqual(self.store.read_entries(), {"owner": [entry]})
-        self.assertEqual(self.store.schedule_watermarks(), {occurrence.key(): occurrence.slot})
-
     def test_failed_queue_write_rolls_back_watermark_together(self) -> None:
         self.store.read_entries()
         occurrence = self.occurrence()

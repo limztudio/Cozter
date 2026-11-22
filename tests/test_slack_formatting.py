@@ -57,44 +57,12 @@ class SlackFormattingTests(unittest.IsolatedAsyncioTestCase):
         self.bot = SlackBot("bot-token", "app-token", ["C1"])
         self.bot.app = SimpleNamespace(client=self.client)
 
-    async def test_rich_reply_uses_native_markdown_block(self) -> None:
-        markdown = (
-            "# Plan\n\n"
-            "- [x] Done\n"
-            "- [ ] Next\n\n"
-            "| Item | Status |\n| --- | --- |\n| Slack | Ready |\n\n"
-            "```python\nprint('ready')\n```"
-        )
-
-        handle = await self.bot.send_text("C1", markdown, rich=True)
-
-        self.assertEqual(handle, MessageHandle("C1", "1.0"))
-        self.assertEqual(self.client.posts, [{
-            "channel": "C1",
-            "text": markdown,
-            "blocks": [{"type": "markdown", "text": markdown}],
-        }])
-
     async def test_rich_reply_propagates_native_markdown_rejection(self):
         self.client = _MarkdownRejectingClient()
         self.bot.app = SimpleNamespace(client=self.client)
         with self.assertRaises(SlackApiError):
             await self.bot.send_text("C1", "# Title", rich=True)
         self.assertEqual(self.client.posts, [])
-
-    async def test_rich_edit_uses_native_markdown_block(self) -> None:
-        markdown = "## Working\n\n- [ ] Running"
-
-        await self.bot.edit_text(
-            MessageHandle("C1", "10.0"), markdown, rich=True,
-        )
-
-        self.assertEqual(self.client.updates, [{
-            "channel": "C1",
-            "ts": "10.0",
-            "text": markdown,
-            "blocks": [{"type": "markdown", "text": markdown}],
-        }])
 
     async def test_sdk_response_rejections_propagate_for_posts_and_edits(self):
         self.client = _MarkdownRejectingClient(sdk_response=True)

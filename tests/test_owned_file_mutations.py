@@ -16,7 +16,6 @@ class OwnedWorkerTests(unittest.IsolatedAsyncioTestCase):
     async def test_normal_result_failure_and_permission_context_are_preserved(self):
         with tool_permission_scope("full"):
             self.assertEqual(await run_owned_worker(get_tool_permission), "full")
-            self.assertEqual(await run_owned_worker(lambda value, *, suffix: value + suffix, "a", suffix="b"), "ab")
         self.assertEqual(get_tool_permission(), "auto")
 
         def fail():

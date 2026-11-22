@@ -2830,7 +2830,7 @@ and tool surface; `tests/` are excluded and the chat-platform adapters are
 temporarily error-suppressed for their untyped SDK interactions, as defined
 in `mypy.ini`.
 
-The workspace verification baseline calls for at least 780 discovered tests.
+The workspace verification baseline calls for at least 2,250 discovered tests.
 The checked-in CI commands run discovery and fail on test failures, but do
 not separately enforce a numeric test-count threshold. Check the reported
 `Ran ... tests` count when using that baseline, and investigate a lower

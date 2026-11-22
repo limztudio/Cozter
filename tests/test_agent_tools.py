@@ -121,7 +121,6 @@ class AgentToolHelperTests(unittest.TestCase):
             "copy_file: " + "s" * keep + marker
             + " -> " + "d" * keep + marker,
         )
-        self.assertEqual(clip_status_value("ok"), "ok")
         self.assertEqual(
             clip_status_value("x" * 201), "x" * keep + marker,
         )

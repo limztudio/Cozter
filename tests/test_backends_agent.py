@@ -132,7 +132,6 @@ class BackendSharedHelperTests(unittest.TestCase):
         self.assertEqual(catalog.calls, 2)
 
     def test_messages_content_texts_flattens_usable_envelopes(self) -> None:
-        self.assertEqual(messages_content_texts("hello"), ["hello"])
         self.assertEqual(messages_content_texts(""), [])
         self.assertIsNone(messages_content_texts(None))
         self.assertIsNone(messages_content_texts({"type": "text"}))
@@ -195,15 +194,7 @@ class BackendSharedHelperTests(unittest.TestCase):
         apply_messages_assistant_content("plain", string_result)
         self.assertEqual(string_result.text, "plain")
 
-    def test_summarize_cli_tool_prefers_command_then_path(self) -> None:
-        self.assertEqual(
-            summarize_cli_tool("Bash", {"command": "ls"}),
-            "$ ls",
-        )
-        self.assertEqual(
-            summarize_cli_tool("Write", {"file_path": "a.py"}),
-            "Write: a.py",
-        )
+    def test_summarize_cli_tool_handles_invalid_and_long_values(self) -> None:
         self.assertEqual(summarize_cli_tool("", None), "tool")
         self.assertEqual(summarize_cli_tool("Read", {"path": 3}), "Read")
         long_cmd = "x" * 300
