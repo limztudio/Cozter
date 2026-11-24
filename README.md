@@ -1065,7 +1065,7 @@ reserved or unavailable; direct Slack mentions work too, for example
 | `/colony [number\|now]` | Show memory state, set the consolidation interval, or run it now |
 | `/refresh` | Refresh every backend's model catalog in parallel for chat, summaries, and Flexible; preserve selected models, configuration, and native conversations |
 | `/stop` | Cancel the running agent turn and clear queued work |
-| `/pause` | Hold queue drain, scheduler, retries and delivery until next message resumes |
+| `/pause` | Hold queued work, scheduled prompts, retries and delivery until resumed |
 | `/bg <task>` or `/background <task>` | Start a restart-safe detached task with the selected compatible backend |
 | `/inject <text>` | Add context to the running turn; Cozter abandons its active phase and restarts with it |
 | `/reserve` | Create a recurring scheduled prompt |
@@ -1087,11 +1087,11 @@ are visible without guessing.
 
 `/pause` holds queue drain, scheduled prompts, prerequisite retries and staged
 deliveries for that user, and freezes a live turn in place without
-discarding its queued work. The next text, file or command resumes the held
-work and also runs that new message, except a bare resume word
-(`resume`, `continue`, `proceed`, `unpause`, `go on`) or a photo/file
-without a task caption, which only wakes the held work without queueing
-itself; `/stop` clears the hold with the rest.
+discarding its queued work. Commands such as `/open` and their input prompts
+leave the hold in place. A new task message or file resumes the held work
+and runs the new task. A bare resume word (`resume`, `continue`, `proceed`,
+`unpause`, `go on`) or an attachment without a task caption only wakes the
+held work. `/stop` cancels the work and clears the hold.
 
 `/context` applies a character budget to each composed turn. Cozter never
 truncates the current user message: it trims saved context first and, if

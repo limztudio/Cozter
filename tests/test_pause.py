@@ -51,14 +51,24 @@ class PauseCommandTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Unknown command: /nope", self.bot.replies[-1])
         self.assertIn("/pause", self.bot.replies[-1])
 
-    async def test_pause_dispatch_holds_and_next_command_resumes(self) -> None:
+    async def test_open_and_workspace_selection_keep_queue_paused(self) -> None:
+        admitted = await self.bot._admit_queue_entry(self.uid, "held task", "c1", 0)
+        assert admitted is not None and admitted.entry is not None
         await self.bot.dispatch_command(self._ctx(command="pause"))
-        self.assertIn(self.uid, self.bot._manually_paused)
+        with mock.patch.object(self.bot, "_start_queue_drain") as start_drain:
+            await self.bot.dispatch_command(self._ctx(command="open"))
+            self.assertIn("Current workspace:", self.bot.replies[-1])
+            await self.bot.dispatch_text(self._ctx(text="1"))
+            self.assertIn("Workspace selected:", self.bot.replies[-1])
+            await self.bot.dispatch_text(self._ctx(text=r"\open"))
+            self.assertIn("Current workspace:", self.bot.replies[-1])
+            await self.bot.dispatch_command(self._ctx(command="cancel"))
+            self.assertEqual(self.bot.replies[-1], "Cancelled.")
+            start_drain.assert_not_called()
         self.assertTrue(self.bot._holds_queue(self.uid))
         self.assertIsNone(self.bot._start_queue_drain(self.uid))
-        await self.bot.dispatch_command(self._ctx(command="version"))
-        self.assertNotIn(self.uid, self.bot._manually_paused)
-        self.assertIn("Paused", self.bot.replies[0])
+        entries = self.bot._queue_entries(self.bot._read_queue_file().get(self.uid))
+        self.assertEqual([entry["id"] for entry in entries], [admitted.entry["id"]])
 
     async def test_pause_holds_reply_delivery_until_resume(self) -> None:
         await self.bot.dispatch_command(self._ctx(command="pause"))
@@ -136,7 +146,7 @@ class PauseCommandTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_pause_rejects_inject_until_resume(self) -> None:
         await self.bot.dispatch_command(self._ctx(command="pause"))
-        await self.bot.cmd_inject(self._ctx(command="inject", args="late"))
+        await self.bot.dispatch_command(self._ctx(command="inject", args="late"))
         self.assertIn("Paused", self.bot.replies[-1])
         self.assertIn(self.uid, self.bot._manually_paused)
 

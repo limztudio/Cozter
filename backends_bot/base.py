@@ -1308,8 +1308,6 @@ class BotPlatform(ABC):
         ctx.had_pending = (
             self._pending_input.pop(ctx.user_id, None) is not None
         )
-        if ctx.command is not None and ctx.command.lower() != "pause":
-            self._resume_manual_pause(ctx.user_id)
         await handler(self, ctx)
 
     async def dispatch_text(self, ctx: BotContext) -> None:
@@ -2648,8 +2646,7 @@ class BotPlatform(ABC):
         # queue drain, scheduler, retries and delivery.
         self._freeze_active_turn_for_pause(uid)
         await ctx.reply_text(
-            "Paused. Queue drain, scheduler, retries and delivery hold"
-            " until your next message, file or command resumes."
+            "Paused. Send 'resume', a new task message or a file to resume."
         )
 
     def _resume_manual_pause(self, uid: str) -> bool:
