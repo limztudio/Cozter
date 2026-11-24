@@ -2,6 +2,7 @@
 
 import asyncio
 import unittest
+from unittest import mock
 
 from Cozter.backends_bot.base import MessageHandle
 from Cozter.backends_bot.slack import SlackBot
@@ -59,6 +60,26 @@ class SlackMessageCommandTests(unittest.TestCase):
         asyncio.run(bot._on_app_mention(event))
 
         self.assertEqual(bot.replies, ["Cozter bot is running."])
+
+    def test_mention_and_file_caption_dispatch_command_while_paused(self) -> None:
+        for text, files in (
+            ("<@B1> /start", []),
+            (r"<@B1> \start", [{"id": "F1"}, {"id": "F2"}]),
+        ):
+            with self.subTest(text=text):
+                bot = _CapturingSlackBot()
+                bot._manually_paused.add("U1")
+                with mock.patch.object(bot, "_handle_files") as handle_files:
+                    asyncio.run(bot._on_app_mention({
+                        "user": "U1",
+                        "channel": "C1",
+                        "text": text,
+                        "files": files,
+                    }))
+                    handle_files.assert_not_awaited()
+                self.assertEqual(bot.replies, ["Cozter bot is running."])
+                self.assertEqual(bot.chat_texts, [])
+                self.assertTrue(bot._holds_queue("U1"))
 
 
 if __name__ == "__main__":

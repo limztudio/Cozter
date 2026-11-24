@@ -914,6 +914,8 @@ class SignalBot(BotPlatform):
             return
 
         if isinstance(attachments, list) and attachments:
+            if await self._dispatch_known_command_text(self._ctx(group_id, text=text)):
+                return
             await self._handle_attachments(
                 group_id, text, attachments,
             )

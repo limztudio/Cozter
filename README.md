@@ -1041,7 +1041,8 @@ All chat surfaces speak the same command set:
 Every command also accepts a leading backslash in a regular message, such
 as `\open 2`. This is useful in Slack workspaces where `/` commands are
 reserved or unavailable; direct Slack mentions work too, for example
-`@Cozter \open 2`.
+`@Cozter \open 2`. A file caption that begins with a recognized command runs
+the command and skips the attachment.
 
 | Command | What it does |
 |---|---|

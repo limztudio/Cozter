@@ -1310,24 +1310,27 @@ class BotPlatform(ABC):
         )
         await handler(self, ctx)
 
+    async def _dispatch_known_command_text(self, ctx: BotContext) -> bool:
+        text = ctx.text.strip()
+        if not text.startswith(("/", "\\")):
+            return False
+        parts = text[1:].split(None, 1)
+        command = parts[0].split("@", 1)[0].lower() if parts else ""
+        if command not in self._COMMANDS:
+            return False
+        ctx.text = ""
+        ctx.command = command
+        ctx.args = parts[1] if len(parts) > 1 else ""
+        await self.dispatch_command(ctx)
+        return True
+
     async def dispatch_text(self, ctx: BotContext) -> None:
-        """Entry point for plain text and backslash command aliases."""
+        """Entry point for plain text and command aliases."""
         if not self.authorized(ctx.user_id, ctx.chat_id):
             return
-        if not ctx.text or not ctx.text.strip():
-            return
-
-        # Accept ``\open`` etc. as aliases (known names only).
         text = ctx.text.strip()
-        if text.startswith("\\"):
-            parts = text[1:].split(None, 1)
-            command = parts[0].split("@", 1)[0] if parts else ""
-            if command.lower() in self._COMMANDS:
-                ctx.text = ""
-                ctx.command = command
-                ctx.args = parts[1] if len(parts) > 1 else ""
-                await self.dispatch_command(ctx)
-                return
+        if not text or await self._dispatch_known_command_text(ctx):
+            return
 
         pending = self._pending_input.pop(ctx.user_id, None)
         if pending is not None:

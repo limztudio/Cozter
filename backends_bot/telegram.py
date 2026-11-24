@@ -480,9 +480,12 @@ class TelegramBot(BotPlatform):
     ) -> None:
         if not self._precheck(update):
             return
-        uid = str(update.effective_user.id)
-        ws = workspace.get_current(uid, self.platform_id)
         message = update.message
+        caption = (message.caption or "").strip()
+        ctx = self._build_context(update, text=caption)
+        if ctx is None or await self._dispatch_known_command_text(ctx):
+            return
+        ws = workspace.get_current(ctx.user_id, self.platform_id)
 
         if message.document:
             media = message.document
@@ -538,13 +541,10 @@ class TelegramBot(BotPlatform):
             )
             return
 
-        caption = (message.caption or "").strip()
         filename = os.path.basename(filename) or f"file_{telegram_file.file_id}"
 
         if not ws or not os.path.isdir(ws):
-            ctx = self._build_context(update, text="")
-            if ctx:
-                await ctx.reply_text(NO_WORKSPACE_TEXT)
+            await ctx.reply_text(NO_WORKSPACE_TEXT)
             return
 
         try:
@@ -562,12 +562,8 @@ class TelegramBot(BotPlatform):
             await self._reply_file_error(update, f"Failed to download file: {exc}")
             return
 
-        ctx = self._build_context(
-            update, text="",
-            attachment=AttachmentInfo(local_path, filename, kind, caption),
-        )
-        if ctx is None:
-            return
+        ctx.text = ""
+        ctx.attachment = AttachmentInfo(local_path, filename, kind, caption)
         await self.dispatch_file(ctx)
 
     def _precheck(self, update: Update) -> bool:

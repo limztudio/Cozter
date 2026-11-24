@@ -305,6 +305,32 @@ class UploadLimitPlatformTests(unittest.IsolatedAsyncioTestCase):
             "10", upload_limit_message(3), rich=False,
         )
 
+    async def test_telegram_command_caption_keeps_pause_before_media_checks(self) -> None:
+        for caption in (r"\start", r"\START@Cozter", "/start"):
+            with self.subTest(caption=caption):
+                bot = TelegramBot("token", ["1"], max_upload_bytes=3)
+                bot.app = SimpleNamespace(bot=SimpleNamespace(id=99))
+                bot.send_text = mock.AsyncMock(return_value=None)
+                bot._manually_paused.add("1")
+                media = SimpleNamespace(
+                    file_name="large.bin", file_id="file-id", file_size=4,
+                    get_file=mock.AsyncMock(),
+                )
+                update = SimpleNamespace(
+                    effective_user=SimpleNamespace(id=1, full_name="Test User"),
+                    effective_chat=SimpleNamespace(id=10),
+                    message=SimpleNamespace(
+                        document=media, photo=None, audio=None, video=None,
+                        voice=None, video_note=None, caption=caption,
+                    ),
+                )
+                with mock.patch.object(bot, "dispatch_file") as files:
+                    await bot._on_file(update, None)
+                files.assert_not_awaited()
+                media.get_file.assert_not_awaited()
+                self.assertTrue(bot._holds_queue("1"))
+                bot.send_text.assert_awaited_once_with("10", "Cozter bot is running.", rich=False)
+
     async def test_telegram_unknown_size_uses_bounded_downloader(
         self,
     ) -> None:

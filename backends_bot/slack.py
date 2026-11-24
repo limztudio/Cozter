@@ -466,15 +466,15 @@ class SlackBot(BotPlatform):
         if not from_app_mention and marker and marker in text:
             return
         files = event.get("files") or []
+        ctx = self.make_context(uid, channel, text=text)
 
         if files:
-            await self._handle_files(event, files, text)
+            if not await self._dispatch_known_command_text(ctx):
+                await self._handle_files(event, files, text)
             return
 
-        if not text:
-            return
-
-        await self.dispatch_text(self.make_context(uid, channel, text=text))
+        if text:
+            await self.dispatch_text(ctx)
 
     async def _on_app_mention(self, event, **_kwargs) -> None:
         """Handle a direct Slack mention as ordinary input.

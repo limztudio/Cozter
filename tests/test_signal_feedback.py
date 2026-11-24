@@ -64,6 +64,25 @@ class SignalFeedbackTests(unittest.IsolatedAsyncioTestCase):
         await bot._outbound_journal.load()
         self.assertFalse(os.path.exists(self.path))
 
+    async def test_command_caption_keeps_pause_and_skips_attachments(self) -> None:
+        for caption in (r"\start", r"\START@Cozter", "/start"):
+            with self.subTest(caption=caption):
+                bot = self.bot()
+                uid = bot._state_user_id("group")
+                bot._manually_paused.add(uid)
+                item = self.message(caption, local=False, sync=False)
+                item["envelope"]["dataMessage"]["attachments"] = [{"id": "a"}, {"id": "b"}]
+                with (
+                    mock.patch.object(bot, "dispatch_command", SignalBot.dispatch_command.__get__(bot)),
+                    mock.patch.object(bot, "_handle_attachments") as attachments,
+                    mock.patch.object(bot, "send_text") as send,
+                ):
+                    await bot._handle_received_item(item)
+                attachments.assert_not_awaited()
+                bot.dispatch_text.assert_not_awaited()
+                self.assertTrue(bot._holds_queue(uid))
+                send.assert_awaited_once_with("group", "Cozter bot is running.", rich=False)
+
     async def test_repeated_own_sync_echoes_are_not_consumed_and_survive_restart(self) -> None:
         sender = self.bot()
         await sender.send_text("group", "A finished report")
