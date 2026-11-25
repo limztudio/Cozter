@@ -771,6 +771,95 @@ class JobContinuationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.bot._read_queue_file(), {})
         self.assertIn("Full original request completed", self.bot.sent)
 
+    async def test_outer_continuations_announce_once_per_stretch(self):
+        original = "Finish every target module across all steps"
+        await self.enqueue(original)
+        attempt = 0
+
+        async def run_turn(_prompt, _ws, *, session_id=None, **_kwargs):
+            nonlocal attempt
+            attempt += 1
+            if attempt < 5:
+                result = self.partial(reason="judge_limit", sid=session_id)
+                result.continue_instruction = f"Finish remaining target step {attempt}"
+                result.text = f"PARTIAL: finished step {attempt}"
+                return result
+            return self.final(sid=session_id)
+
+        with mock.patch.object(agent, "run", side_effect=run_turn):
+            await asyncio.wait_for(self.bot._drain_message_queue("u1"), timeout=2)
+
+        self.assertEqual(attempt, 5)
+        notices = [
+            text for text in self.bot.sent
+            if text == "Saved progress; continuing the current job before starting any later queued job."
+        ]
+        self.assertEqual(len(notices), 1)
+        self.assertIn("Full original request completed", self.bot.sent)
+        self.assertEqual(self.bot._read_queue_file(), {})
+
+    async def test_outer_repeat_stall_pauses_after_limit_and_resets_on_guidance(self):
+        original = "Repair stalled task"
+        entry = await self.enqueue(original)
+        calls = 0
+        stalled = self.partial(reason="judge_limit")
+
+        async def run_turn(_prompt, _ws, *, session_id=None, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls <= 8:
+                return AgentResult(
+                    text=stalled.text,
+                    error=stalled.error,
+                    continue_instruction=stalled.continue_instruction,
+                    continuation_reason=stalled.continuation_reason,
+                    continuation_checkpoint=dict(stalled.continuation_checkpoint or {}),
+                    session_id=session_id or self.sid,
+                )
+            return self.final(sid=session_id)
+
+        with mock.patch.object(agent, "run", side_effect=run_turn):
+            await asyncio.wait_for(self.bot._drain_message_queue("u1"), timeout=2)
+            saved = await self.bot._load_job_checkpoint("u1", entry)
+            self.assertEqual(calls, 8)
+            self.assertEqual(saved["state"], "paused")
+            self.assertEqual(saved["stall_count"], 7)
+            self.assertIn("u1", self.bot._paused_jobs)
+            self.assertTrue(any("without new progress" in text for text in self.bot.sent))
+
+            with mock.patch.object(self.bot, "_start_queue_drain"):
+                resumed = await self.bot._resume_paused_job("u1", "chat", "Skip the failing mirror", 0)
+            self.assertTrue(resumed)
+            saved_after = await self.bot._load_job_checkpoint("u1", entry)
+            self.assertNotIn("stall_count", saved_after)
+            self.assertNotIn("stall_signature", saved_after)
+            self.assertNotIn("continued_status_sent", saved_after)
+            await asyncio.wait_for(self.bot._drain_message_queue("u1"), timeout=2)
+
+        self.assertEqual(calls, 9)
+        self.assertEqual(self.bot._read_queue_file(), {})
+        self.assertIn("Full original request completed", self.bot.sent)
+
+    async def test_update_handoff_pending_yields_active_continuation_without_closing_gate(self):
+        original = "Continue after yielding for update"
+        entry = await self.enqueue(original)
+        calls = 0
+
+        async def run_turn(_prompt, _ws, *, session_id=None, **_kwargs):
+            nonlocal calls
+            calls += 1
+            self.bot._update_handoff_pending = True
+            return self.partial(reason="judge_limit", sid=session_id)
+
+        with mock.patch.object(agent, "run", side_effect=run_turn):
+            await asyncio.wait_for(self.bot._drain_message_queue("u1"), timeout=2)
+
+        self.assertEqual(calls, 1)
+        self.assertFalse(self.bot._update_restart_pending)
+        saved = await self.bot._load_job_checkpoint("u1", entry)
+        self.assertEqual(saved["state"], "running")
+        self.assertFalse(any("Saved progress; continuing" in text for text in self.bot.sent))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -509,5 +509,48 @@ class NonDictEventTests(unittest.TestCase):
         )
 
 
+class CodexUsageDeltaTests(unittest.IsolatedAsyncioTestCase):
+    async def test_resumed_codex_turn_completed_reports_incremental_delta_and_per_turn_fallback(self) -> None:
+        import tempfile
+        from Cozter import execution_state, workspace
+        from unittest import mock
+
+        backend = CodexBackend()
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(workspace, "CONFIG_DIR", tmp):
+            async with execution_state.execution_scope(tmp, "usage-job", "Work"):
+                execution_state.bind_conversation("conv-1")
+                async with execution_state.backend_scope("codex", "gpt-6-luna", "full", 0, native=True) as record:
+                    r1 = AgentResult()
+                    backend.parse_event({"type": "thread.started", "thread_id": "11111111-1111-1111-1111-111111111111"}, r1)
+                    backend.parse_event({
+                        "type": "turn.completed",
+                        "usage": {"input_tokens": 1000, "cached_input_tokens": 400, "output_tokens": 200},
+                    }, r1)
+                    self.assertEqual(r1.usage, {"input_tokens": 1000, "cached_input_tokens": 400, "output_tokens": 200})
+
+                    await record.save(native_resume_attempted=True)
+                    r2 = AgentResult()
+                    backend.parse_event({
+                        "type": "turn.completed",
+                        "usage": {"input_tokens": 1600, "cached_input_tokens": 700, "output_tokens": 320},
+                    }, r2)
+                    self.assertEqual(r2.usage, {"input_tokens": 600, "cached_input_tokens": 300, "output_tokens": 120})
+
+                    # Non-monotonic drop falls back cleanly to per-turn reporting and keeps it.
+                    r3 = AgentResult()
+                    backend.parse_event({
+                        "type": "turn.completed",
+                        "usage": {"input_tokens": 250, "cached_input_tokens": 50, "output_tokens": 40},
+                    }, r3)
+                    self.assertEqual(r3.usage, {"input_tokens": 250, "cached_input_tokens": 50, "output_tokens": 40})
+
+                    r4 = AgentResult()
+                    backend.parse_event({
+                        "type": "turn.completed",
+                        "usage": {"input_tokens": 350, "cached_input_tokens": 80, "output_tokens": 50},
+                    }, r4)
+                    self.assertEqual(r4.usage, {"input_tokens": 350, "cached_input_tokens": 80, "output_tokens": 50})
+
+
 if __name__ == "__main__":
     unittest.main()

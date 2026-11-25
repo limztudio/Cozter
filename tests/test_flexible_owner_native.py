@@ -221,3 +221,127 @@ class FlexibleOwnerNativeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("VERIFY-REMAINING-DOCS-2", resumed["prompt"])
         self.assertEqual(len(self.planner_prompts), 1)
         self.assertEqual(self.merge_prompts, [])
+
+    async def test_outer_resume_keeps_checkpoint_off_active_native_owner_and_preserves_clean_owner_request(self):
+        self._select_workers("codex")
+        sid = self._conversation()
+        self.plan = owner_plan(tier="high", specialists=[])
+        job = "outer-resume-strip-checkpoint"
+        original = "FULL-ORIGINAL-OUTER-REQUEST"
+        secret_checkpoint = '{"reports":[{"instruction":"step","report":"SECRET_CHECKPOINT_BLOB"}]}'
+
+        async def judge_once(*_args, **_kwargs):
+            return flexible.JudgeVerdict(True, "Step 2 still needs work", "VERIFY-STEP-2"), False
+
+        inject_queue = asyncio.Queue()
+        inject_queue.put_nowait("ADDED-NOTE")
+        with (mock.patch.object(flexible, "JUDGE_MAX_CONTINUES", 1),
+              mock.patch.object(agent, "_judge_draft", side_effect=judge_once)):
+            partial = await agent.run(
+                original, self.ws, 7, model="unused-flexible-model", approval="full",
+                summary_model="offline-summary", backend_name="flexible",
+                summary_backend_name="codex", session_id=sid, execution_id=job,
+                original_request=original, inject_queue=inject_queue,
+            )
+        self.assertEqual(partial.continuation_reason, "judge_limit")
+        owner = self.attempts[-1]
+
+        # Simulate a legacy pre-fix polluted owner_request saved in state.json to verify self-healing.
+        folded_original = original + "\n\n[Added while working]:\nADDED-NOTE"
+        polluted_owner_request = (
+            original
+            + "\n\n[Added while you were thinking]:\nADDED-NOTE"
+            + "\n\n[Resume the SAME unfinished job; later queued jobs remain held.]\n"
+            + "OLD-ENVELOPE\n[Saved progress checkpoint]:\n"
+            + secret_checkpoint
+        )
+        async with execution_state.execution_scope(self.ws, job, original):
+            saved = await execution_state.record("flexible_plan")
+            await saved.save(owner_request=polluted_owner_request)
+
+        resumed_outer_prompt = (
+            folded_original
+            + "\n\n[Resume the SAME unfinished job; later queued jobs remain held.]\n"
+            + "Keep the original full scope above.\nVERIFY-REMAINING-COMPACT-TARGET\n"
+            + "[Saved progress checkpoint]:\n"
+            + secret_checkpoint
+        )
+        # Active resumed thread must get compact instructions without re-injecting original request or checkpoint JSON.
+        self.missing_provider = None
+        with mock.patch.object(agent, "_judge_draft", return_value=(flexible.JudgeVerdict(False, verified=True), False)):
+            result = await self.run_job(sid, job=job, request=resumed_outer_prompt, original=folded_original)
+
+        self.assertFalse(result.error)
+        resumed = self.attempts[-1]
+        self.assertEqual(resumed["previous_id"], owner["native_id"])
+        self.assertIn("VERIFY-REMAINING-COMPACT-TARGET", resumed["prompt"])
+        self.assertNotIn("SECRET_CHECKPOINT_BLOB", resumed["prompt"])
+        self.assertNotIn("FULL-ORIGINAL-OUTER-REQUEST", resumed["prompt"])
+        self.assertEqual(self.record.get("owner_request"), original + "\n\n[Added while you were thinking]:\nADDED-NOTE")
+
+        # Missing/lost native provider session must bootstrap with full checkpoint evidence.
+        self.plan = owner_plan(tier="high", specialists=[])
+        job_missing = "outer-resume-bootstrap-checkpoint"
+        with (mock.patch.object(flexible, "JUDGE_MAX_CONTINUES", 1),
+              mock.patch.object(agent, "_judge_draft", side_effect=judge_once)):
+            await self.run_job(sid, job=job_missing, request=original, original=original)
+        lost_native_id = self.attempts[-1]["native_id"]
+        self.missing_provider = lost_native_id
+        missing_outer_prompt = (
+            original
+            + "\n\n[Resume the SAME unfinished job; later queued jobs remain held.]\n"
+            + "VERIFY-MISSING-BOOTSTRAP-TARGET\n"
+            + "[Saved progress checkpoint]:\n"
+            + secret_checkpoint
+        )
+        with mock.patch.object(agent, "_judge_draft", return_value=(flexible.JudgeVerdict(False, verified=True), False)):
+            result = await self.run_job(sid, job=job_missing, request=missing_outer_prompt, original=original)
+
+        self.assertFalse(result.error)
+        bootstrap_attempt = self.attempts[-1]
+        self.assertIn("VERIFY-MISSING-BOOTSTRAP-TARGET", bootstrap_attempt["prompt"])
+        self.assertIn("SECRET_CHECKPOINT_BLOB", bootstrap_attempt["prompt"])
+
+    async def test_direct_native_outer_resume_strips_checkpoint_json_while_preserving_bootstrap(self):
+        self._select_workers("codex")
+        sid = self._conversation()
+        job = "direct-native-checkpoint"
+        original = "DIRECT-NATIVE-ORIGINAL-SCOPE"
+        secret_checkpoint = '{"reports":[{"instruction":"s1","report":"DIRECT_CHECKPOINT_BLOB"}]}'
+
+        with mock.patch.object(agent, "_judge_draft", return_value=(flexible.JudgeVerdict(False, verified=True), False)):
+            first = await agent.run(
+                original, self.ws, 7, model="gpt-6-luna", approval="full",
+                summary_model="offline-summary", backend_name="codex",
+                summary_backend_name="codex", session_id=sid, execution_id=job,
+                original_request=original,
+            )
+            self.assertFalse(first.error)
+            first_native_id = self.attempts[-1]["native_id"]
+
+            outer_prompt = (
+                original
+                + "\n\n[Resume the SAME unfinished job; later queued jobs remain held.]\n"
+                + "DIRECT-COMPACT-INSTRUCTION\n"
+                + "[Saved progress checkpoint]:\n"
+                + secret_checkpoint
+            )
+            second = await agent.run(
+                outer_prompt, self.ws, 7, model="gpt-6-luna", approval="full",
+                summary_model="offline-summary", backend_name="codex",
+                summary_backend_name="codex", session_id=sid, execution_id=job,
+                original_request=original,
+            )
+            self.assertFalse(second.error)
+            self.assertIn("DIRECT-COMPACT-INSTRUCTION", self.attempts[-1]["prompt"])
+            self.assertNotIn("DIRECT_CHECKPOINT_BLOB", self.attempts[-1]["prompt"])
+
+            self.missing_provider = self.attempts[-1]["native_id"] or first_native_id
+            third = await agent.run(
+                outer_prompt, self.ws, 7, model="gpt-6-luna", approval="full",
+                summary_model="offline-summary", backend_name="codex",
+                summary_backend_name="codex", session_id=sid, execution_id=job,
+                original_request=original,
+            )
+            self.assertFalse(third.error)
+            self.assertIn("DIRECT_CHECKPOINT_BLOB", self.attempts[-1]["prompt"])

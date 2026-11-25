@@ -207,3 +207,39 @@ class FlexibleOwnerErrorReopenTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.record.get("usage_processed_audit"), {"input_tokens": 7})
         self.assertEqual(self.internal_labels, ["Flexible planner"])
 
+    async def test_resolved_owner_obligations_pruned_beyond_retention_cap_with_delivery_shift(self):
+        async def drive(*_args, **_kwargs):
+            return AgentResult(text="Done"), False
+
+        await self.invoke(drive)
+        async with execution_state.execution_scope(self.ws, "low-default", self.request):
+            saved = await execution_state.record("flexible_plan")
+            rows = []
+            for idx in range(150):
+                inst = f"Resolved obligation {idx}"
+                scope = json_digest(flexible.instruction_identity(inst))
+                rows.append({
+                    "id": json_digest([scope, 0]), "scope": scope, "generation": 0,
+                    "instruction": inst, "repeats": 0, "resolved": True,
+                })
+            unresolved_inst = "Still unresolved obligation"
+            unresolved_scope = json_digest(flexible.instruction_identity(unresolved_inst))
+            rows.append({
+                "id": json_digest([unresolved_scope, 0]), "scope": unresolved_scope, "generation": 0,
+                "instruction": unresolved_inst, "repeats": 1, "resolved": False,
+            })
+            await saved.save(owner_obligations={"0": rows}, owner_delivery={"0:low": 140})
+
+            self.assertTrue(await agent._continue_flexible_owner("New judge obligation", "latest"))
+            kept = saved.get("owner_obligations")["0"]
+            delivery = saved.get("owner_delivery")["0:low"]
+            resolved_kept = [row for row in kept if row["resolved"]]
+            unresolved_kept = [row for row in kept if not row["resolved"]]
+            self.assertEqual(len(resolved_kept), agent._MAX_RETAINED_RESOLVED_OBLIGATIONS)
+            self.assertEqual(resolved_kept[0]["instruction"], "Resolved obligation 22")
+            self.assertEqual(resolved_kept[-1]["instruction"], "Resolved obligation 149")
+            self.assertEqual([row["instruction"] for row in unresolved_kept], [unresolved_inst, "New judge obligation"])
+            # 22 dropped rows before delivery frontier 140 -> 140 - 22 = 118.
+            self.assertEqual(delivery, 118)
+            self.assertLessEqual(delivery, len(kept))
+

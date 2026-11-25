@@ -770,6 +770,93 @@ class UpdateHandoffTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(update, return_exceptions=True)
             await bot._stop_daemon_services()
 
+    async def test_update_handoff_yields_multi_attempt_turn_and_restarts_cleanly_on_abort(self):
+        from Cozter import agent, session, workspace
+        from Cozter.backends_agent.base import AgentResult
+        from Cozter.tests.helpers import OfflineBot
+
+        temporary = self.enterContext(tempfile.TemporaryDirectory())
+        self.enterContext(mock.patch.object(workspace, "CONFIG_DIR", temporary))
+        self.enterContext(mock.patch.object(
+            workspace, "get_run_config",
+            return_value=("flexible", "", "", "full", "meta"),
+        ))
+        self.enterContext(mock.patch.object(agent, "_run_post_turn_maintenance", mock.AsyncMock()))
+        bot = OfflineBot(["u1"])
+        bot._daemon_services_started = True
+        bot._current_workspace_for_turn = mock.AsyncMock(return_value=temporary)
+        session.create_session(temporary, name="Update handoff")
+        calls = 0
+        first_started = asyncio.Event()
+        release_first = asyncio.Event()
+
+        async def run_turn(_prompt, _ws, *, session_id=None, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                first_started.set()
+                await release_first.wait()
+                return AgentResult(
+                    text="PARTIAL: checkpoint ready",
+                    continue_instruction="Finish remaining part",
+                    continuation_reason="judge_limit",
+                    session_id=session_id,
+                )
+            return AgentResult(text="Done", session_id=session_id)
+
+        entry_id = await bot._admit_queue_entry("u1", "Long task", "chat", 0)
+        with mock.patch.object(agent, "run", side_effect=run_turn):
+            drain = bot._start_queue_drain("u1")
+            await asyncio.wait_for(first_started.wait(), 1)
+            update = asyncio.create_task(self.main._restart_after_update([bot], 0))
+            try:
+                for _ in range(50):
+                    if bot._update_handoff_pending:
+                        break
+                    await asyncio.sleep(0.002)
+                self.assertTrue(bot._update_handoff_pending)
+                self.assertFalse(bot._update_restart_pending)
+                release_first.set()
+                await asyncio.wait_for(drain, 1)
+                await asyncio.wait_for(update, 1)
+            finally:
+                release_first.set()
+                if not update.done():
+                    update.cancel()
+                await asyncio.gather(update, return_exceptions=True)
+
+            self.pull.assert_called_once()
+            self.assertFalse(bot._update_handoff_pending)
+            self.assertFalse(bot._update_restart_pending)
+            for _ in range(50):
+                if calls >= 2:
+                    break
+                await asyncio.sleep(0.005)
+            await bot._stop_daemon_services()
+        self.assertEqual(calls, 2)
+        self.assertIsNone((await bot._load_job_checkpoint("u1", entry_id))["state"] if bot._read_queue_file() else None)
+
+    async def test_update_handoff_cancelled_before_idle_clears_handoff_flag(self):
+        from Cozter.tests.helpers import OfflineBot
+
+        bot = OfflineBot(["u1"])
+        active = True
+        bot.has_active_turns = lambda: active
+        update = asyncio.create_task(self.main._restart_after_update([bot], 0))
+        try:
+            for _ in range(50):
+                if bot._update_handoff_pending:
+                    break
+                await asyncio.sleep(0.002)
+            self.assertTrue(bot._update_handoff_pending)
+            update.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(update, 1)
+        finally:
+            active = False
+        self.assertFalse(bot._update_handoff_pending)
+        self.assertFalse(bot._update_restart_pending)
+
 
 class PlatformLifecycleTests(unittest.IsolatedAsyncioTestCase):
     def _bot(self):

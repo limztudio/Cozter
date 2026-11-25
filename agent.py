@@ -462,6 +462,74 @@ _EXTRA_BLANK_LINES_RE = re.compile(r"\n{3,}")
 _SAFE_IMAGE_NAME_RE = re.compile(r"[^A-Za-z0-9._-]+")
 _MAX_DETACHED_TASK_REQUESTS = 3
 _MAX_DETACHED_TASK_PROMPT_CHARS = 12_000
+_MAX_RETAINED_RESOLVED_OBLIGATIONS = 128
+_THINKING_ADDED_MARKER = "\n\n[Added while you were thinking]:\n"
+_WORKING_ADDED_MARKER = "\n\n[Added while working]:\n"
+_RESUME_ENVELOPE_MARKER = "\n\n[Resume the SAME unfinished job; later queued jobs remain held.]\n"
+_SAVED_CHECKPOINT_MARKER = "\n[Saved progress checkpoint]:\n"
+
+
+def _strip_resume_envelope(text: str) -> str:
+    """Drop outer continuation envelope/checkpoint suffixes from a base request."""
+    envelope_idx = text.find(_RESUME_ENVELOPE_MARKER)
+    if envelope_idx <= 0:
+        return text
+    head = text[:envelope_idx]
+    tail = text[envelope_idx + len(_RESUME_ENVELOPE_MARKER):]
+    thinking_idx = tail.find(_THINKING_ADDED_MARKER)
+    return head + tail[thinking_idx:] if thinking_idx >= 0 else head
+
+
+def _split_resume_checkpoint(text: str) -> tuple[str, str]:
+    """Separate compact continuation instructions from the JSON checkpoint payload."""
+    idx = text.find(_SAVED_CHECKPOINT_MARKER)
+    if idx < 0:
+        return text, ""
+    before = text[:idx]
+    after_marker = text[idx + len(_SAVED_CHECKPOINT_MARKER):]
+    thinking_idx = after_marker.find(_THINKING_ADDED_MARKER)
+    if thinking_idx >= 0:
+        checkpoint_body = after_marker[:thinking_idx]
+        compact = before + after_marker[thinking_idx:]
+    else:
+        checkpoint_body = after_marker
+        compact = before
+    return compact, _SAVED_CHECKPOINT_MARKER.lstrip("\n") + checkpoint_body
+
+
+def _compact_native_resume_request(phase_request: str) -> str:
+    """Keep compact instructions while dropping the bulky JSON checkpoint on active threads."""
+    if _RESUME_ENVELOPE_MARKER not in phase_request:
+        return phase_request
+    compact, _ = _split_resume_checkpoint(phase_request)
+    return compact
+
+
+def _suffix_matching_prefix(text: str, prefix: str) -> str | None:
+    """Return *text* after *prefix*, treating thinking/working markers as equivalent."""
+    if not prefix:
+        return None
+    if text.startswith(prefix):
+        return text[len(prefix):]
+    if _THINKING_ADDED_MARKER not in prefix and _THINKING_ADDED_MARKER not in text:
+        return None
+    ti = 0
+    pi = 0
+    while pi < len(prefix):
+        if (prefix.startswith(_THINKING_ADDED_MARKER, pi)
+                and text.startswith(_WORKING_ADDED_MARKER, ti)):
+            pi += len(_THINKING_ADDED_MARKER)
+            ti += len(_WORKING_ADDED_MARKER)
+        elif (prefix.startswith(_WORKING_ADDED_MARKER, pi)
+              and text.startswith(_THINKING_ADDED_MARKER, ti)):
+            pi += len(_WORKING_ADDED_MARKER)
+            ti += len(_THINKING_ADDED_MARKER)
+        elif ti < len(text) and text[ti] == prefix[pi]:
+            ti += 1
+            pi += 1
+        else:
+            return None
+    return text[ti:]
 
 
 def _iter_attachment_markers(text: str) -> Iterator[tuple[int, int, str]]:
@@ -1739,6 +1807,10 @@ def _native_turn_prompt(
             # Flexible appends role-specific sections after building shared context.
             prepared.sections.update({name: text for name, text in result.sections.items()
                                       if name not in {"colony", "memory", "summary"}})
+            prepared.bootstrap_sections.update({
+                name: text for name, text in result.bootstrap_sections.items()
+                if name not in {"colony", "memory", "summary"}
+            })
             prepared.partial_sections.update(
                 name for name in result.partial_sections if name not in {"colony", "memory", "summary"}
             )
@@ -2572,6 +2644,33 @@ def _restore_completed_work(value: object) -> set[str]:
     return set(value)
 
 
+def _prune_resolved_obligations(
+    obligations_by_worker: dict[str, list[dict[str, Any]]],
+    delivery: dict[str, int],
+    *,
+    worker_outputs: dict[str, dict[str, Any]] | None = None,
+    max_resolved: int = _MAX_RETAINED_RESOLVED_OBLIGATIONS,
+) -> None:
+    """Retain all unresolved obligations plus a bounded tail of resolved rows."""
+    outputs = worker_outputs or {}
+    for worker_key, rows in obligations_by_worker.items():
+        protected_ids = set(outputs.get(worker_key, {}).get("owner_obligation_ids", ()))
+        prunable_positions = [
+            idx for idx, row in enumerate(rows)
+            if row.get("resolved") and row.get("id") not in protected_ids
+        ]
+        excess = len(prunable_positions) - max_resolved
+        if excess <= 0:
+            continue
+        dropped = set(prunable_positions[:excess])
+        kept = [row for idx, row in enumerate(rows) if idx not in dropped]
+        obligations_by_worker[worker_key] = kept
+        for delivery_key, delivered in list(delivery.items()):
+            if delivery_key.partition(":")[0] == worker_key:
+                shifted = delivered - sum(1 for idx in dropped if idx < delivered)
+                delivery[delivery_key] = max(0, min(len(kept), shifted))
+
+
 async def _continue_flexible_owner(instruction: str, draft: str) -> bool:
     """Reopen the same owner with remaining work and a fresh phase outcome."""
     saved = await execution_state.record("flexible_plan")
@@ -2585,6 +2684,7 @@ async def _continue_flexible_owner(instruction: str, draft: str) -> bool:
         return False
     obligations = {key: [dict(row) for row in rows]
                    for key, rows in saved.get("owner_obligations", {}).items()}
+    delivery = dict(saved.get("owner_delivery") or {})
     rows = obligations.setdefault("0", [])
     identity = json_digest(flexible.instruction_identity(instruction))
     budget = _TURN_BUDGET.get()
@@ -2592,6 +2692,7 @@ async def _continue_flexible_owner(instruction: str, draft: str) -> bool:
         budget.pending.append(instruction)
     if not any(row["scope"] == identity and not row["resolved"] for row in rows):
         rows.append(_new_owner_obligation(instruction, rows))
+    _prune_resolved_obligations(obligations, delivery)
     output = saved.get("output", {})
     errors = saved.get("worker_errors", [])
     audit = saved.get("owner_error_audit", [])
@@ -2605,6 +2706,7 @@ async def _continue_flexible_owner(instruction: str, draft: str) -> bool:
     output["error"] = None
     await saved.save(
         active=True, cursor=0, reports=[], worker_outputs={}, owner_obligations=obligations,
+        owner_delivery=delivery,
         phase_previous_draft=flexible.bounded_draft_excerpt(draft),
         worker_errors=[], blocked=[], output=output, owner_error_audit=audit,
     )
@@ -2734,18 +2836,29 @@ async def _run_flexible(
             owner_request = saved_plan.get("owner_request")
             if not isinstance(owner_request, str) or not owner_request.strip():
                 raise ValueError("Saved Flexible owner request is invalid")
-            if request != owner_request:
+            clean_owner = _strip_resume_envelope(owner_request)
+            if request != clean_owner:
                 resumed_owner_request = request
-                resume_context = request
-                if request.startswith(owner_request):
-                    resume_context = request[len(owner_request):]
-                elif (original_request and owner_request.startswith(original_request)
-                      and request.startswith(original_request)):
-                    resume_context = request[len(original_request):]
-            request = owner_request
+                suffix = _suffix_matching_prefix(request, clean_owner)
+                if suffix is None and original_request:
+                    clean_original = _strip_resume_envelope(original_request)
+                    if _suffix_matching_prefix(clean_owner, clean_original) is not None:
+                        suffix = _suffix_matching_prefix(request, clean_original)
+                if suffix is None:
+                    envelope_idx = request.find(_RESUME_ENVELOPE_MARKER)
+                    resume_context = request[envelope_idx:] if envelope_idx > 0 else request
+                else:
+                    resume_context = suffix
+            request = clean_owner
         previous_draft = saved_plan.get("phase_previous_draft")
         await status(f"flexible: resuming saved plan at {cursor + 1}/{len(restored_tasks)}")
     else:
+        clean_plan_request = _strip_resume_envelope(request)
+        if clean_plan_request != request:
+            resumed_owner_request = request
+            envelope_idx = request.find(_RESUME_ENVELOPE_MARKER)
+            resume_context = request[envelope_idx:] if envelope_idx > 0 else request
+            request = clean_plan_request
         await invalidate()
         await status(f"flexible: planning with {summary_backend.name}/{summary_model}")
         with agent_tools.skill_planning_scope():
@@ -2992,6 +3105,9 @@ async def _run_flexible(
     async def save_progress() -> None:
         if saved_plan is None:
             return
+        _prune_resolved_obligations(
+            owner_obligations, owner_delivery, worker_outputs=worker_outputs,
+        )
         await saved_plan.save(
             active=True, signature=signature, understanding=plan.understanding,
             folded_signatures=folded_signatures,
@@ -3162,6 +3278,9 @@ async def _run_flexible(
         worker_sections.update(obligation_sections)
         worker_context = None
         if backend.name in _NATIVE_BACKENDS:
+            resume_compact, resume_checkpoint_section = (
+                _split_resume_checkpoint(resume_context) if resume_context else ("", "")
+            )
             worker_context = _native_turn_prompt(
                 backend, request, shared_session, shared_colony,
                 budget=shared_budget, collaborative=False, is_scheduled=True,
@@ -3173,8 +3292,21 @@ async def _run_flexible(
             )
             worker_context.sections.update({
                 key: text for key, text in worker_sections.items()
-                if key != "request" and not (owner_mode and key == "previous_draft")
+                if key != "request"
+                and not (owner_mode and key == "previous_draft")
+                and not (key == "resume_context" and resume_checkpoint_section)
             })
+            if resume_checkpoint_section:
+                if resume_compact.strip():
+                    worker_context.sections["resume_context"] = (
+                        "\nCurrent continuation instructions and checkpoint for this same unfinished job."
+                        " Apply these updates while preserving the original scope and completed work:\n"
+                        + resume_compact
+                    )
+                worker_context.bootstrap_sections["resume_checkpoint"] = (
+                    "\nSaved progress checkpoint from earlier attempts:\n"
+                    + resume_checkpoint_section
+                )
             worker_context.partial_sections.update(
                 "owner_obligation:" + item["id"] for item in obligations
             )
@@ -4722,7 +4854,8 @@ async def _run_turn_impl(
             close_inject_on_completion=False,
             on_process=on_process,
             native_context=_native_turn_prompt(
-                backend, native_request if native_request is not None else phase_request,
+                backend,
+                native_request if native_request is not None else _compact_native_resume_request(phase_request),
                 session_data, colony_items, budget=history_budget,
                 collaborative=collaborative, is_scheduled=is_scheduled,
                 bootstrap_request=phase_request, previous_draft=previous_draft,

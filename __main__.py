@@ -1,3 +1,4 @@
+import inspect
 import os
 import subprocess
 import sys
@@ -509,9 +510,20 @@ async def _wait_for_update_idle(
         await asyncio.sleep(_UPDATE_IDLE_POLL_SEC)
 
 
-async def _resume_update_intake(bots: list[BotPlatform]) -> None:
-    """Own every gate release, even during repeated update cancellation."""
-    tasks = [asyncio.create_task(bot.cancel_update_restart()) for bot in bots]
+async def _maybe_await(value: Any) -> Any:
+    if inspect.isawaitable(value):
+        return await value
+    return value
+
+
+async def _settle_update_tasks(
+    coros: list[Any],
+    error_message: str,
+) -> None:
+    """Await every update cleanup coroutine even under repeated cancellation."""
+    if not coros:
+        return
+    tasks = [asyncio.create_task(coro) for coro in coros]
     pending = set(tasks)
     interrupted: asyncio.CancelledError | None = None
     while pending:
@@ -530,7 +542,28 @@ async def _resume_update_intake(bots: list[BotPlatform]) -> None:
     if len(errors) == 1:
         raise errors[0]
     if errors:
-        raise BaseExceptionGroup("Failed to resume platforms after deferred update", errors)
+        raise BaseExceptionGroup(error_message, errors)
+
+
+async def _resume_update_intake(bots: list[BotPlatform]) -> None:
+    """Own every gate release, even during repeated update cancellation."""
+    await _settle_update_tasks(
+        [bot.cancel_update_restart() for bot in bots],
+        "Failed to resume platforms after deferred update",
+    )
+
+
+async def _release_update_handoffs(bots: list[BotPlatform]) -> None:
+    """Clear handoff requests for platforms whose restart gate did not close."""
+    coros = []
+    for bot in bots:
+        cancel_handoff = getattr(bot, "cancel_update_handoff", None)
+        if callable(cancel_handoff):
+            coros.append(_maybe_await(cancel_handoff()))
+    await _settle_update_tasks(
+        coros,
+        "Failed to clear update handoff requests after deferred update",
+    )
 
 
 async def _restart_after_update(
@@ -539,6 +572,7 @@ async def _restart_after_update(
 ) -> None:
     """Wait with intake open, then freeze only a confirmed idle handoff."""
     prepared: list[BotPlatform] = []
+    handoff_bots: list[BotPlatform] = []
     checkout_changed = False
 
     def pull_update() -> bool:
@@ -549,12 +583,21 @@ async def _restart_after_update(
         return checkout_changed
 
     async def release_intake() -> None:
-        nonlocal prepared
+        nonlocal prepared, handoff_bots
         releasing, prepared = prepared, []
         await _resume_update_intake(releasing)
+        remaining = [bot for bot in handoff_bots if bot not in releasing]
+        handoff_bots = []
+        await _release_update_handoffs(remaining)
 
     try:
         while True:
+            for bot in bots:
+                if bot not in handoff_bots:
+                    handoff_bots.append(bot)
+                request_handoff = getattr(bot, "request_update_handoff", None)
+                if callable(request_handoff):
+                    await _maybe_await(request_handoff())
             await _wait_for_update_idle(
                 bots,
                 log_message="Update deferred; work continues until an idle restart handoff",

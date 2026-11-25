@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import threading
 import time
+from typing import Any
 
 
 from ..execution_state import native_session_id, record_missing_native_session
@@ -120,6 +121,42 @@ def _stderr_preview(value: str | bytes | None) -> str:
     if not isinstance(value, str):
         return ""
     return clip_status_value(value.strip(), 200)
+
+
+def _incremental_turn_usage(record: Any, usage: dict) -> dict:
+    """Convert cumulative resumed Codex thread usage into per-turn deltas."""
+    raw_usage = dict(usage)
+    if record is None:
+        return raw_usage
+    current_sid = native_session_id(record.get("native_session_id"))
+    if current_sid is None:
+        return raw_usage
+    prev = record.get("codex_cumulative_usage")
+    if (isinstance(prev, dict) and prev.get("session_id") == current_sid
+            and prev.get("per_turn")):
+        return raw_usage
+    prev_usage = prev.get("usage") if isinstance(prev, dict) else None
+    delta = raw_usage
+    if (record.get("native_resume_attempted")
+            and isinstance(prev, dict) and prev.get("session_id") == current_sid
+            and isinstance(prev_usage, dict)):
+        comparable = [
+            key for key, value in raw_usage.items()
+            if type(value) is int and key in prev_usage and type(prev_usage[key]) is int
+        ]
+        if comparable and all(raw_usage[key] >= prev_usage[key] for key in comparable):
+            delta = {}
+            for key, value in raw_usage.items():
+                if type(value) is int:
+                    base = prev_usage.get(key, 0)
+                    delta[key] = value - base if type(base) is int else value
+                else:
+                    delta[key] = value
+        elif comparable:
+            record.set(codex_cumulative_usage={"session_id": current_sid, "per_turn": True})
+            return raw_usage
+    record.set(codex_cumulative_usage={"session_id": current_sid, "usage": raw_usage})
+    return delta
 
 
 class CodexBackend(Backend):
@@ -426,7 +463,15 @@ class CodexBackend(Backend):
         elif event_type == "turn.completed":
             usage = event.get("usage")
             if isinstance(usage, dict):
-                result.usage = dict(usage)
+                delta = _incremental_turn_usage(record, usage)
+                if result.usage is None:
+                    result.usage = delta
+                else:
+                    for key, value in delta.items():
+                        if type(value) is int and type(result.usage.get(key)) is int:
+                            result.usage[key] += value
+                        else:
+                            result.usage[key] = value
 
         elif event_type == "turn.failed":
             error_payload = event.get("error")

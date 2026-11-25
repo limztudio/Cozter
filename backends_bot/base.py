@@ -46,6 +46,7 @@ from ..utils import clip_status_value
 from ..utils import create_background_task
 from ..utils import drain_queue as _drain_queue
 from ..utils import ensure_lock
+from ..utils import json_digest
 from ..utils import load_json_object
 from ..utils import IMAGE_EXTENSIONS
 from ..utils import parse_decimal_int
@@ -185,6 +186,7 @@ _DETACHED_TASK_POLL_INTERVAL_SEC = 5.0
 # A stalled provider or chat must leave capacity for unrelated owners.
 _DURABLE_POLL_CONCURRENCY = 4
 _DETACHED_TERMINAL_STATES = frozenset({"done", "failed", "stopped"})
+_OUTER_REPEAT_STALL_LIMIT = 7
 # Bare resume signals must only wake held work, never become queued work.
 _RESUME_ONLY_TEXTS = frozenset({
     "resume", "resumed", "continue", "proceed", "unpause", "go on",
@@ -741,6 +743,7 @@ class BotPlatform(ABC):
     # Opt in to owned late creation, recovery and per-message edit rotation.
     status_initial_timeout_sec: ClassVar[float | None] = None
     status_recovery_interval_sec: ClassVar[float | None] = None
+    _update_handoff_pending: bool = False
 
     def __init__(
         self,
@@ -781,6 +784,8 @@ class BotPlatform(ABC):
         self._daemon_services_started = False
         # Update pulled; waiting for active replies before restart.
         self._update_restart_pending = False
+        # Update waiting for idle handoff; active multi-attempt turns yield at checkpoints.
+        self._update_handoff_pending = False
         self._queue_file_lock: asyncio.Lock = asyncio.Lock()
         self._reply_delivery_file_lock: asyncio.Lock = asyncio.Lock()
         self._reply_delivery_locks: dict[str, asyncio.Lock] = {}
@@ -1048,9 +1053,22 @@ class BotPlatform(ABC):
     async def cancel_update_restart(self) -> None:
         """Resume normal processing if an update restart is aborted."""
         self._update_restart_pending = False
+        self._update_handoff_pending = False
         if not self._daemon_services_started:
             return
         await self.start_scheduler()
+        for uid in list(self._message_queues):
+            self._start_queue_drain(uid)
+
+    async def request_update_handoff(self) -> None:
+        """Ask active multi-attempt turns to yield cleanly at their next checkpoint."""
+        self._update_handoff_pending = True
+
+    async def cancel_update_handoff(self) -> None:
+        """Resume any turns that yielded before an update restart began."""
+        self._update_handoff_pending = False
+        if not self._daemon_services_started:
+            return
         for uid in list(self._message_queues):
             self._start_queue_drain(uid)
 
@@ -3157,7 +3175,14 @@ class BotPlatform(ABC):
             request = job.get("request") or entries[0].get("text", "")
             job["request"] = request + "\n\n[User guidance for the unfinished job]:\n" + guidance
             job["state"] = "running"
-            for key in ("next_retry_at", "retry_count", "retry_reason"):
+            for key in (
+                "next_retry_at",
+                "retry_count",
+                "retry_reason",
+                "continued_status_sent",
+                "stall_count",
+                "stall_signature",
+            ):
                 job.pop(key, None)
             self._write_queue_file(data)
             return True
@@ -4810,11 +4835,48 @@ class BotPlatform(ABC):
                 for addition in additions:
                     if isinstance(addition, str) and addition:
                         request += "\n\n[Added while working]:\n" + addition
+            if not isinstance(checkpoint, dict):
+                checkpoint = {}
             pinned_session = result.session_id or pinned_session
             resumable = bool(result.continuation_reason or (
                 result.continue_instruction and not result.error
             ) or (not result.error and result.completion_verified is not False
                   and result.text.lstrip().upper().startswith("PARTIAL")))
+            prerequisite_retry = result.continuation_reason == "prerequisite"
+            stalled_pause = False
+            stall_count = 0
+            if resumable and not prerequisite_retry:
+                stall_signature = json_digest({
+                    "reason": result.continuation_reason,
+                    "error": result.error or "",
+                    "continue_instruction": result.continue_instruction,
+                    "text": result.text,
+                    "pending": checkpoint.get("pending", []),
+                    "reports": checkpoint.get("reports", []),
+                    "completed_work": sorted(result.completed_work),
+                    "tool_events": [
+                        [event.kind, event.content]
+                        for event in result.events
+                        if event.kind in ("tool", "file")
+                    ],
+                })
+                previous_stalls = job.get("stall_count", 0)
+                if (not isinstance(previous_stalls, int)
+                        or isinstance(previous_stalls, bool) or previous_stalls < 0):
+                    previous_stalls = 0
+                stall_count = (
+                    previous_stalls + 1
+                    if job.get("stall_signature") == stall_signature
+                    else 0
+                )
+                job["stall_signature"] = stall_signature
+                job["stall_count"] = stall_count
+                if stall_count >= _OUTER_REPEAT_STALL_LIMIT:
+                    stalled_pause = True
+                    resumable = False
+            else:
+                for key in ("stall_signature", "stall_count"):
+                    job.pop(key, None)
             job.update({
                 "request": request, "session_id": pinned_session,
                 "instruction": result.continue_instruction or (
@@ -4827,7 +4889,6 @@ class BotPlatform(ABC):
                 "state": "running" if resumable else "paused",
                 "output": self._job_output_record(result, ws),
             })
-            prerequisite_retry = result.continuation_reason == "prerequisite"
             if prerequisite_retry:
                 previous_retries = job.get("retry_count", 0)
                 if (not isinstance(previous_retries, int) or isinstance(previous_retries, bool)
@@ -4855,8 +4916,15 @@ class BotPlatform(ABC):
                 return False
             if not resumable:
                 self._paused_jobs.add(uid)
-                explanation = ("Completion could not be verified.\n\nLatest draft:\n"
-                               if result.completion_verified is False else "")
+                if stalled_pause:
+                    explanation = (
+                        f"Paused after {stall_count + 1} continuation attempts without new progress.\n\n"
+                        "Latest draft:\n"
+                    )
+                elif result.completion_verified is False:
+                    explanation = "Completion could not be verified.\n\nLatest draft:\n"
+                else:
+                    explanation = ""
                 paused_text, _ = agent.extract_await(result.text or result.error or
                                                      "No completed answer was produced.")
                 await self._send_text_best_effort(
@@ -4866,13 +4934,17 @@ class BotPlatform(ABC):
                     "Reply with guidance to resume it, or use /stop to cancel.",
                 )
                 return False
-            await self._run_status_operation(
-                self.send_status(chat_id, "Saved progress; continuing the current "
-                                 "job before starting any later queued job."),
-                action="announcing continued work",
-            )
-            if self._update_restart_pending:
+            if self._update_restart_pending or self._update_handoff_pending:
                 return False  # queue checkpoint survives the updater's restart
+            if not job.get("continued_status_sent"):
+                job["continued_status_sent"] = True
+                if queue_entry_id and not await self._save_job_checkpoint(uid, queue_entry_id, job):
+                    return False
+                await self._run_status_operation(
+                    self.send_status(chat_id, "Saved progress; continuing the current "
+                                     "job before starting any later queued job."),
+                    action="announcing continued work",
+                )
             await asyncio.sleep(0)
 
     @staticmethod
@@ -5615,12 +5687,12 @@ class BotPlatform(ABC):
             except Exception as exc:
                 logger.exception("Queued AI chat failed")
                 await self._pause_job_after_failure(uid, entry_id, msg_chat_id, exc)
-                if self._update_restart_pending or self._holds_queue(uid):
+                if self._update_restart_pending or self._update_handoff_pending or self._holds_queue(uid):
                     break
             else:
                 if completed is False:
                     await self._retain_job_entry(uid, entry_id)
-                    if self._update_restart_pending or self._holds_queue(uid):
+                    if self._update_restart_pending or self._update_handoff_pending or self._holds_queue(uid):
                         break
                     continue  # guidance arrived while the pause notice was sending
                 await self._persist_complete(uid, entry_id)
