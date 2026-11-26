@@ -35,7 +35,7 @@ class _MetaModelSpec(NamedTuple):
     supports_max: bool
 
 
-# https://dev.meta.ai/docs/models and /docs/reasoning (2026-11-11).
+# https://dev.meta.ai/docs/models and /docs/reasoning (2026-11-26).
 _FALLBACK_MODEL_SPECS = (
     _MetaModelSpec("muse-wonder-1.0", 1_048_576, True),
     _MetaModelSpec("muse-ember-1.0", 1_048_576, True),

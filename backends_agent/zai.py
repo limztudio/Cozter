@@ -1,6 +1,6 @@
 """Z.ai (Zhipu GLM) backend: OpenAI-compatible cloud API.
 
-Z.ai serves the GLM models (glm-5.3, glm-5.3-flash/flashx, glm-5.2, glm-5.1,
+Z.ai serves the GLM models (glm-5.4, glm-5.3, glm-5.3-flash/flashx, glm-5.2, glm-5.1,
 glm-5, ...) through OpenAI-compatible endpoints with Bearer auth. It reuses
 the shared :class:`OpenAIChatBackend` loop; this module supplies only Z.ai's
 specifics - the endpoint, the Authorization header built from the configured
@@ -38,6 +38,7 @@ class _ZaiModelSpec(NamedTuple):
 
 
 _FALLBACK_MODEL_SPECS = (
+    _ZaiModelSpec("glm-5.4", 1_000_000, True, True),
     _ZaiModelSpec("glm-5.3", 1_000_000, True, True),
     _ZaiModelSpec("glm-5.3-flash", 1_000_000, True, True),
     _ZaiModelSpec("glm-5.3-flashx", 1_000_000, True, True),
@@ -65,6 +66,7 @@ _FALLBACK_MODEL_SPECS = (
 )
 # Coding-Plan-only IDs: keep the ``[1m]`` pin out of the fallback.
 _CODING_PLAN_FALLBACK_MODEL_SPECS = (
+    _ZaiModelSpec("glm-5.4[1m]", 1_000_000, True, True),
     _ZaiModelSpec("glm-5.3[1m]", 1_000_000, True, True),
     _ZaiModelSpec("glm-5.3-flash[1m]", 1_000_000, True, True),
 )
@@ -105,17 +107,18 @@ _NON_CHAT_COMPLETION_MODEL_IDS = frozenset({
 })
 _NO_FUNCTION_TOOL_MODELS = frozenset({"glm-4.5v"})
 _COMPULSORY_THINKING_MODELS = frozenset({"glm-4.7", "glm-4.5v"})
-_GLM_5_3_REASONING_MODELS = frozenset({
-    "glm-5.3", "glm-5.3-flash", "glm-5.3-flashx", "glm-5.3-flashx-legal",
+_THREE_LEVEL_REASONING_MODELS = frozenset({
+    "glm-5.4", "glm-5.3", "glm-5.3-flash", "glm-5.3-flashx",
+    "glm-5.3-flashx-legal",
 })
-_GLM_5_3_EFFORT_LEVELS = ("low", "high", "max")
+_THREE_LEVEL_EFFORT_LEVELS = ("low", "high", "max")
 
 
 def _capability_model_id(model: str | None) -> str:
     """Normalize Z.ai's model suffixes for local capability lookups.
 
     The request must keep the exact selected ID -- notably the Coding Plan's
-    ``glm-5.3[1m]`` / ``glm-5.3-flash[1m]`` long-context spelling -- while
+    ``glm-5.4[1m]`` / ``glm-5.3[1m]`` / ``glm-5.3-flash[1m]`` long-context spelling -- while
     effort, tool-streaming, context, and preserved-thinking support are
     shared with its base model.
     """
@@ -150,8 +153,8 @@ class ZaiBackend(CachedOpenAIChatBackend):
     def effort_levels_for_model(self, model: str | None) -> tuple[str, ...]:
         """Return the documented reasoning vocabulary for one GLM model."""
         selected = _capability_model_id(model or self.default_model)
-        if selected in _GLM_5_3_REASONING_MODELS:
-            return _GLM_5_3_EFFORT_LEVELS
+        if selected in _THREE_LEVEL_REASONING_MODELS:
+            return _THREE_LEVEL_EFFORT_LEVELS
         if selected == "glm-5.2":
             return self.effort_levels
         return ()
@@ -188,7 +191,7 @@ class ZaiBackend(CachedOpenAIChatBackend):
         if percent <= 0:
             return {}
         selected = _capability_model_id(model or self.default_model)
-        if selected in _GLM_5_3_REASONING_MODELS or selected == "glm-5.2":
+        if selected in _THREE_LEVEL_REASONING_MODELS or selected == "glm-5.2":
             return {
                 "thinking": {"type": "enabled"},
                 "reasoning_effort": effort_band(

@@ -1978,6 +1978,8 @@ class ZaiBackendTests(unittest.TestCase):
 
     def test_context_windows_cover_only_published_curated_ids(self) -> None:
         backend = ZaiBackend()
+        self.assertEqual(backend.context_window_tokens("glm-5.4"), 1_000_000)
+        self.assertEqual(backend.context_window_tokens("glm-5.4[1m]"), 1_000_000)
         self.assertEqual(backend.context_window_tokens("glm-5.3"), 1_000_000)
         self.assertEqual(
             backend.context_window_tokens("glm-5.3-flash"), 1_000_000,
@@ -2019,17 +2021,19 @@ class ZaiBackendTests(unittest.TestCase):
             tuple(
                 spec.name for spec in zai_mod._CODING_PLAN_FALLBACK_MODEL_SPECS
             ),
-            ("glm-5.3[1m]", "glm-5.3-flash[1m]"),
+            ("glm-5.4[1m]", "glm-5.3[1m]", "glm-5.3-flash[1m]"),
         )
         self.assertEqual(
             zai_mod._CODING_PLAN_FALLBACK_MODELS,
             (
+                "glm-5.4[1m]",
                 "glm-5.3[1m]",
                 "glm-5.3-flash[1m]",
                 *(model for model in zai_mod._FALLBACK_MODELS if model not in {"glm-5.3-flashx", "glm-5.3-flashx-legal"}),
             ),
         )
         self.assertIn("glm-5.3-flash", zai_mod._FALLBACK_MODELS)
+        self.assertNotIn("glm-5.4[1m]", zai_mod._FALLBACK_MODELS)
         self.assertNotIn("glm-5.3[1m]", zai_mod._FALLBACK_MODELS)
         self.assertNotIn("glm-5.3-flash[1m]", zai_mod._FALLBACK_MODELS)
         self.assertEqual(
@@ -2277,8 +2281,8 @@ class ZaiBackendTests(unittest.TestCase):
     def test_glm_5_3_family_uses_its_reasoning_only_effort_scale(self) -> None:
         backend = ZaiBackend()
         for model in (
-            "GLM-5.3", "GLM-5.3-FLASH", "GLM-5.3-FLASHX",
-            "glm-5.3[1m]", "glm-5.3-flash[1m]",
+            "GLM-5.4", "GLM-5.3", "GLM-5.3-FLASH", "GLM-5.3-FLASHX",
+            "glm-5.4[1m]", "glm-5.3[1m]", "glm-5.3-flash[1m]",
         ):
             with self.subTest(model=model):
                 self.assertEqual(
@@ -2318,8 +2322,8 @@ class ZaiBackendTests(unittest.TestCase):
             - {"glm-4-32b-0414-128k"},
         )
         for model in (
-            "glm-5.3", "glm-5.3-flash", "glm-5.3-flashx", "glm-5.3-flashx-legal",
-            "glm-5.3-flash[1m]",
+            "glm-5.4", "glm-5.3", "glm-5.3-flash", "glm-5.3-flashx", "glm-5.3-flashx-legal",
+            "glm-5.4[1m]", "glm-5.3-flash[1m]",
             "glm-5.2", "GLM-5.2[1M]",
             "glm-4.5-air",
         ):
@@ -2329,7 +2333,7 @@ class ZaiBackendTests(unittest.TestCase):
             with self.subTest(model=model):
                 self.assertFalse(backend._preserve_reasoning_content(model))
 
-        for model in ("glm-5.3", "glm-5.3-flash", "glm-5.3-flashx", "glm-5.3-flashx-legal", "glm-5.2"):
+        for model in ("glm-5.4", "glm-5.3", "glm-5.3-flash", "glm-5.3-flashx", "glm-5.3-flashx-legal", "glm-5.2"):
             with self.subTest(model=model):
                 self.assertEqual(
                     backend._preserved_reasoning_request_fields(model, {}),
@@ -2346,8 +2350,10 @@ class ZaiBackendTests(unittest.TestCase):
     def test_documented_glms_stream_tool_call_arguments(self) -> None:
         backend = ZaiBackend()
         expected_models = {
+            "glm-5.4[1m]",
             "glm-5.3[1m]",
             "glm-5.3-flash[1m]",
+            "glm-5.4",
             "glm-5.3",
             "glm-5.3-flash",
             "glm-5.3-flashx",

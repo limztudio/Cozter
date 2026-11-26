@@ -111,6 +111,8 @@ class EffortMaximumPolicyTests(unittest.TestCase):
             (MetaModelApiBackend(), "private-muse", "medium", "high"),
             (ZaiBackend(), "glm-5.2", "high", "max"),
             (ZaiBackend(), "GLM-5.2[1M]", "high", "max"),
+            (ZaiBackend(), "glm-5.4", "high", "max"),
+            (ZaiBackend(), "GLM-5.4[1M]", "high", "max"),
             (ZaiBackend(), "glm-5.3", "high", "max"),
             (ZaiBackend(), "GLM-5.3-FLASH[1M]", "high", "max"),
             (ZaiBackend(), "glm-5.3-flashx", "high", "max"),

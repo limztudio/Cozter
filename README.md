@@ -63,7 +63,7 @@ works across every backend.
   - `llama` — an unauthenticated OpenAI-compatible HTTP server (such as
     llama-server or LM Studio); the agent loop runs in-process and uses the
     typed tools in `agent_tools/`
-  - `zai` — Z.ai's cloud API (Zhipu GLM models: `glm-5.3`, `glm-5.3-flash`,
+  - `zai` — Z.ai's cloud API (Zhipu GLM models: `glm-5.4`, `glm-5.3`, `glm-5.3-flash`,
     `glm-5.3-flashx`, `glm-5.3-flashx-legal`, `glm-5.2`, `glm-5v-turbo`, `glm-5.1`, `glm-5`, `glm-4.7` family,
     `glm-4.6`/`glm-4.6v`/`glm-4.5` variants including `glm-4.5-air`
     (the default summary model), plus documented Coding Plan `[1m]` pins);
@@ -595,8 +595,8 @@ valid HTTPS URL. A blank, malformed, or non-HTTPS override falls back to the
 default so the API key is never sent over cleartext HTTP.
 GLM Coding Plan users can instead set it to
 `https://api.z.ai/api/coding/paas/v4`. The normal endpoint's fallback already
-includes `glm-5.3` and multimodal `glm-5.3-flash`/`glm-5.3-flashx`/`glm-5.3-flashx-legal`; the Coding Plan fallback
-omits standard-only FlashX variants and offers the documented `glm-5.3[1m]` and `glm-5.3-flash[1m]` pins.
+includes `glm-5.4`, `glm-5.3`, and multimodal `glm-5.3-flash`/`glm-5.3-flashx`/`glm-5.3-flashx-legal`; the Coding Plan fallback
+omits standard-only FlashX variants and offers the documented `glm-5.4[1m]`, `glm-5.3[1m]`, and `glm-5.3-flash[1m]` pins.
 `meta_api_key` enables the `meta` backend (Meta Model API — Muse Wonder, Ember, and Spark).
 Get one from the Meta Model API developer console and paste it here (the
 docs also expose it as a `MODEL_API_KEY` environment variable). The backend
@@ -1706,7 +1706,7 @@ tiers still inherit their existing workspace effort.
 Defaults put all three tiers on `codex` (`gpt-6-luna` / `gpt-6-sol` /
 `gpt-6.1-sol`), with `gpt-6.1-sol` for chat and `gpt-6-luna` for summaries.
 These defaults follow the [current Codex model guidance](https://developers.openai.com/codex/models)
-and the installed CLI catalog (verified 2026-11-11 against codex-cli 0.167.0
+and the installed CLI catalog (verified 2026-11-26 against codex-cli 0.171.0
 and grok 1.0.70; codex's `gpt-5.5` retired from the live catalog on 2026-10-14 and is no longer in the fallback; Claude picker adds Haiku 5.5,
 released 2026-10-07).
 Model access depends on the account and client; select an available model on
@@ -1852,12 +1852,12 @@ session toggle, not a Cozter command or a selectable `*-fast` model ID. Llama,
 Z.ai, and Meta Model API discover models live from their configured HTTP
 endpoints.
 
-Antigravity CLI uses the official `agy` executable, verified against `1.5.4`.
+Antigravity CLI uses the official `agy` executable, verified against `1.5.14`.
 Run `agy` once to finish native Google sign-in, then choose `/agent` →
 `antigravity_cli`. The model picker reads the signed-in account's `agy models`
 catalog and refreshes it after 60 seconds. It includes Carbon and Argon Low, Medium,
 and High when the account offers those variants. The fallback catalog also includes
-the Hydrogen and orchestrator IDs observed in the 1.5.9 account catalog. Cozter sends one framed
+the Neon, Hydrogen, and orchestrator IDs observed in the 1.5.14 account catalog. Cozter sends one framed
 JSON prompt through file-backed stdin, captures the CLI-assigned conversation
 UUID, and resumes only that UUID with `--conversation`. The same session can
 be opened in native `agy --conversation <UUID>` from its workspace. Direct
@@ -1892,7 +1892,7 @@ results retained in request order. Writes, shell/build commands, mixed-action
 plugins, and undeclared plugins form serial barriers;
 the loop advertises `parallel_tool_calls` so the model may batch independent
 calls in a single turn. Z.ai's text chat-completion models from GLM-4.6
-onward, plus multimodal `glm-5.3-flash`/`glm-5.3-flashx`/`glm-5.3-flashx-legal`, opt into Z.ai's incremental
+onward (including `glm-5.4`), plus multimodal `glm-5.3-flash`/`glm-5.3-flashx`/`glm-5.3-flashx-legal`, opt into Z.ai's incremental
 tool-call argument stream; older vision models use their standard streamed
 function-call deltas because that vision request schema does not accept
 `tool_stream`. The shared SSE parser merges
@@ -1971,10 +1971,10 @@ back to `auto` if the server is down or returns no model IDs. The `zai`
 picker queries the configured Z.ai `/models` endpoint and retains its curated
 agent-capable fallback, including text-compatible multimodal models such as
 `glm-5v-turbo`, `glm-4.6v`, and `glm-4.5v`, if the account cannot be queried.
-The normal Z.ai fallback includes the general endpoint's default
-`glm-5.3` model and multimodal `glm-5.3-flash`/`glm-5.3-flashx`/`glm-5.3-flashx-legal`. A Coding Plan base URL
-omits FlashX variants from its fallback and surfaces `glm-5.3[1m]` and `glm-5.3-flash[1m]`, following
-the [Flash/FlashX availability guide](https://docs.z.ai/guides/vlm/glm-5.3-flash). Cozter maps `/effort` for
+The normal Z.ai fallback includes `glm-5.4`, the general endpoint's default
+`glm-5.3` model, and multimodal `glm-5.3-flash`/`glm-5.3-flashx`/`glm-5.3-flashx-legal`. A Coding Plan base URL
+omits FlashX variants from its fallback and surfaces `glm-5.4[1m]`, `glm-5.3[1m]`, and `glm-5.3-flash[1m]`, following
+the [GLM-5.4](https://docs.z.ai/devpack/latest-model) and [Flash/FlashX](https://docs.z.ai/guides/vlm/glm-5.3-flash) guides. Cozter maps `/effort` for
 both families to Z.ai's supported `low` / `high` / `max` reasoning levels, preserves
 their opaque reasoning state between tool calls, and enables their documented
 tool-call streaming.
@@ -2045,7 +2045,7 @@ Codex uses discovered effort and context-window metadata only while its
 known public models use Cozter's built-in metadata and a previously discovered
 private model has no inferred context window, so the `/compact` message-
 interval safeguard applies. An explicit `model_context_windows` entry remains
-authoritative. The Codex fallback was verified on 2026-11-23 against
+authoritative. The Codex fallback was verified on 2026-11-26 against
 codex-cli 0.171.0 and the [official model guide](https://learn.chatgpt.com/docs/models).
 It includes `gpt-6.2-sol`, `gpt-6.2-astra`, `gpt-6.1-terra`, `gpt-6.1-sol`,
 `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, and the GPT-5.6 Sol/Terra/Luna
@@ -2104,7 +2104,7 @@ retain their native behavior.
 | `codex` | Model-aware: 4–6 levels | `ultra` (Astra/Sol/Terra), `max` (Luna), or `xhigh` (others) |
 | `llama` | 4 levels; highest reserved for `100` | `payload["reasoning_effort"] = "high"` |
 | `meta` | Muse Wonder 1.0 and Standard Spark 1.3: 6 levels (`minimal` through `max`); older and Contributor models: 5 levels (`minimal` through `xhigh`) | `payload["reasoning_effort"] = "max"` for Wonder/standard 1.3; `xhigh` for older and Contributor models |
-| `zai` | GLM-5.3/Flash/FlashX/FlashX-Legal: `low` / `high` / `max`; GLM-5.2: `none` / `high` / `max`; other GLMs use documented thinking switches | `payload["reasoning_effort"] = "max"` for graded models |
+| `zai` | GLM-5.4 & GLM-5.3/Flash/FlashX/FlashX-Legal: `low` / `high` / `max`; GLM-5.2: `none` / `high` / `max`; other GLMs use documented thinking switches | `payload["reasoning_effort"] = "max"` for graded models |
 | `claude_code` | Model-aware: current Fable / Haiku 5.5 / Sonnet 5.5 / Sonnet 5 / Opus 4.7+ use 5 levels; Opus 4.6 and Sonnet 4.6 use 4; Opus 4.5, Haiku and older Sonnet pins use their defaults | `--effort max` for supported current models |
 | `copilot` | 7 levels (`none` through `max`) for an explicit model; `auto` delegates to Copilot | `--reasoning-effort max` for an explicit model; omitted for `auto` |
 | `grok` | Model-aware: grok-4.7 / grok-4.7-build-fast / grok-4.6 use 4 levels; grok-4.5 and unknown models use 3 | `--effort xhigh` on 4.7/4.6; `--effort high` otherwise |
